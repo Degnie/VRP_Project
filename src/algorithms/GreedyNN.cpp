@@ -12,7 +12,8 @@
 // ============================================================================
 #include "GreedyNN.h"
 #include <limits>
-#include <set>
+#include <stdexcept>
+#include <vector>
 
 GreedyNN::GreedyNN() {}
 
@@ -26,13 +27,25 @@ Solucion GreedyNN::resolver(const Instancia& inst) {
     const int n = inst.cantidadNodos();   // incluye al depósito
     const int Q = inst.capacidad();
 
-    // Conjunto de clientes que aún no han sido visitados.
-    // Los ids van desde 1 hasta n-1 (el 0 es el depósito).
-    std::set<int> noVisitados;
-    for (int i = 1; i < n; ++i) noVisitados.insert(i);
+    // Validación: si algún cliente pide más de lo que cabe en el vehículo,
+    // jamás será elegible y el bucle de abajo generaría rutas vacías para
+    // siempre. Cortamos acá con un error claro en vez de colgar la app.
+    for (int i = 1; i < n; ++i) {
+        if (inst.nodo(i).demanda > Q) {
+            throw std::invalid_argument(
+                "El cliente " + std::to_string(inst.nodo(i).id) +
+                " tiene demanda mayor que la capacidad del vehículo (Q).");
+        }
+    }
+
+    // vector<bool> en vez de std::set<int>: acceso O(1) contiguo en memoria,
+    // mejor localidad de caché que los nodos dispersos de un árbol rojo-negro.
+    std::vector<bool> visitado(n, false);
+    visitado[0] = true;   // el depósito no se "visita" como cliente
+    int pendientes = n - 1;
 
     // Mientras queden clientes sin visitar, construimos una ruta más.
-    while (!noVisitados.empty()) {
+    while (pendientes > 0) {
 
         Ruta rutaActual;
         rutaActual.push_back(0);          // arranca en el depósito
@@ -41,17 +54,19 @@ Solucion GreedyNN::resolver(const Instancia& inst) {
 
         // Vamos llenando la ruta hasta que ya no quepa nadie.
         while (true) {
-            int    mejorVecino  = -1;
-            double minDistancia = std::numeric_limits<double>::infinity();
+            int    mejorVecino    = -1;
+            double minDistanciaSq = std::numeric_limits<double>::infinity();
 
             // Buscamos el cliente más cercano cuya demanda entre en la carga.
-            for (int cliente : noVisitados) {
+            // Comparamos distancia al cuadrado: mismo orden que la real, sin sqrt.
+            for (int cliente = 1; cliente < n; ++cliente) {
+                if (visitado[cliente]) continue;
                 int demanda = inst.nodo(cliente).demanda;
                 if (demanda <= capacidadRestante) {
-                    double d = inst.distancia(nodoActual, cliente);
-                    if (d < minDistancia) {
-                        minDistancia = d;
-                        mejorVecino  = cliente;
+                    double dSq = inst.distanciaCuadrada(nodoActual, cliente);
+                    if (dSq < minDistanciaSq) {
+                        minDistanciaSq = dSq;
+                        mejorVecino    = cliente;
                     }
                 }
             }
@@ -62,7 +77,8 @@ Solucion GreedyNN::resolver(const Instancia& inst) {
             // Añadimos el cliente a la ruta.
             rutaActual.push_back(mejorVecino);
             capacidadRestante -= inst.nodo(mejorVecino).demanda;
-            noVisitados.erase(mejorVecino);
+            visitado[mejorVecino] = true;
+            --pendientes;
             nodoActual = mejorVecino;
         }
 

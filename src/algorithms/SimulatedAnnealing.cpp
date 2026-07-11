@@ -16,13 +16,17 @@
 #include <algorithm>
 #include <cmath>
 #include <random>
+#include <vector>
 
 // -----------------------------------------------------------------------------
-//  Generador aleatorio único para toda la clase (semilla no determinista).
-//  Se declara con "static" para que sea local al archivo.
+//  Generador aleatorio: uno POR HILO (thread_local), no compartido.
+//  std::mt19937 no es thread-safe; si dos SA corren a la vez en dos QThreads
+//  (p.ej. GUI lanzando varias corridas), un generador global compartido
+//  produciría carreras de datos. thread_local da una instancia independiente
+//  por hilo sin necesidad de locks.
 // -----------------------------------------------------------------------------
 static std::mt19937& generador() {
-    static std::mt19937 gen(std::random_device{}());
+    thread_local std::mt19937 gen(std::random_device{}());
     return gen;
 }
 
@@ -52,39 +56,41 @@ std::string SimulatedAnnealing::nombre() const {
 }
 
 // -----------------------------------------------------------------------------
-//  2-opt intra-ruta:
-//    Elige una ruta al azar y dos posiciones i < j dentro de esa ruta,
-//    e invierte el segmento entre i y j.
-//  Esto no cambia la carga total de la ruta, así que no rompe la restricción
-//  de capacidad; solo cambia el orden de visita.
+//  2-opt intra-ruta con delta O(1):
+//    Ruta r = [0, ..., r[i-1], r[i], ..., r[j], r[j+1], ..., 0].
+//    Invertir [i, j] rompe las aristas (r[i-1],r[i]) y (r[j],r[j+1]) y crea
+//    (r[i-1],r[j]) y (r[i],r[j+1]). El resto de la ruta no cambia de costo,
+//    así que el delta es la diferencia de esas 4 distancias — nada de
+//    recorrer la ruta ni la solución completa.
 // -----------------------------------------------------------------------------
-Solucion SimulatedAnnealing::aplicar2Opt(const Solucion& sol) {
-    Solucion vecino = sol;   // copia completa (solución original intacta)
-
-    if (vecino.cantidadRutas() == 0) return vecino;
+double SimulatedAnnealing::aplicar2Opt(const Instancia& inst, Solucion& sol,
+                                        int& idxRuta, int& i, int& j) {
+    if (sol.cantidadRutas() == 0) return 0.0;
 
     // 1) Elegir una ruta al azar que tenga al menos 4 elementos (0, a, b, 0).
-    //    Menos que eso no admite un 2-opt real.
     std::vector<int> rutasCandidatas;
-    for (int i = 0; i < vecino.cantidadRutas(); ++i) {
-        if (static_cast<int>(vecino.ruta(i).size()) >= 4) {
-            rutasCandidatas.push_back(i);
+    for (int r = 0; r < sol.cantidadRutas(); ++r) {
+        if (static_cast<int>(sol.ruta(r).size()) >= 4) {
+            rutasCandidatas.push_back(r);
         }
     }
-    if (rutasCandidatas.empty()) return vecino;
+    if (rutasCandidatas.empty()) return 0.0;
 
-    int idxRuta = rutasCandidatas[randomEntero(0, static_cast<int>(rutasCandidatas.size()) - 1)];
-    Ruta& r = vecino.ruta(idxRuta);
+    idxRuta = rutasCandidatas[randomEntero(0, static_cast<int>(rutasCandidatas.size()) - 1)];
+    Ruta& r = sol.ruta(idxRuta);
 
     // 2) Elegir i, j dentro de la ruta (sin incluir los depósitos de los extremos).
-    //    r tiene forma [0, c1, c2, ..., ck, 0]. Trabajamos entre 1 y size-2.
-    int i = randomEntero(1, static_cast<int>(r.size()) - 3);
-    int j = randomEntero(i + 1, static_cast<int>(r.size()) - 2);
+    i = randomEntero(1, static_cast<int>(r.size()) - 3);
+    j = randomEntero(i + 1, static_cast<int>(r.size()) - 2);
 
-    // 3) Invertir el segmento [i, j].
+    // 3) Delta real de las 2 aristas que cambian.
+    double antes   = inst.distancia(r[i - 1], r[i]) + inst.distancia(r[j], r[j + 1]);
+    double despues = inst.distancia(r[i - 1], r[j]) + inst.distancia(r[i], r[j + 1]);
+
+    // 4) Mutar in-place. El caller revierte con el mismo reverse si rechaza.
     std::reverse(r.begin() + i, r.begin() + j + 1);
 
-    return vecino;
+    return despues - antes;
 }
 
 // -----------------------------------------------------------------------------
@@ -95,34 +101,37 @@ Solucion SimulatedAnnealing::resolver(const Instancia& inst) {
     Solucion actual = greedy.resolver(inst);
     Solucion mejor  = actual;
 
+    // Costo se mantiene incremental (O(1) por movimiento), no se recalcula
+    // recorriendo toda la solución en cada iteración.
+    double costoActual = actual.costoTotal(inst);
+    double costoMejor   = costoActual;
+
     double T = m_T0;
 
     // 2) Bucle principal de enfriamiento.
     while (T > m_Tmin) {
 
-        // Generar solución vecina con 2-opt.
-        Solucion vecino = aplicar2Opt(actual);
+        int idxRuta = -1, i = -1, j = -1;
+        double delta = aplicar2Opt(inst, actual, idxRuta, i, j);
 
-        // Calcular la diferencia de costo.
-        double costoActual = actual.costoTotal(inst);
-        double costoVecino = vecino.costoTotal(inst);
-        double delta       = costoVecino - costoActual;
+        if (idxRuta == -1) {
+            // No había ninguna ruta elegible para 2-opt; nada que hacer.
+            T = T * m_alpha;
+            continue;
+        }
 
-        // Criterio de aceptación.
-        if (delta < 0.0) {
-            // El vecino es mejor: lo aceptamos siempre.
-            actual = vecino;
+        bool aceptar = (delta < 0.0) || (randomReal() < std::exp(-delta / T));
 
-            // ¿Es también mejor que el mejor histórico?
-            if (costoVecino < mejor.costoTotal(inst)) {
-                mejor = vecino;
+        if (aceptar) {
+            costoActual += delta;
+            if (costoActual < costoMejor) {
+                mejor      = actual;
+                costoMejor = costoActual;
             }
         } else {
-            // El vecino es peor: lo aceptamos con probabilidad p.
-            double p = std::exp(-delta / T);
-            if (randomReal() < p) {
-                actual = vecino;
-            }
+            // Revertir: invertir el mismo segmento lo deja como estaba.
+            Ruta& r = actual.ruta(idxRuta);
+            std::reverse(r.begin() + i, r.begin() + j + 1);
         }
 
         // Enfriamiento geométrico.

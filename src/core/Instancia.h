@@ -36,6 +36,11 @@ public:
     // Se calcula on-the-fly (no se guarda matriz) para poder escalar a n grande.
     double distancia(int i, int j) const;
 
+    // Distancia al cuadrado (sin sqrt). Usar en comparaciones de heurísticas
+    // (p.ej. buscar el vecino más cercano); el orden relativo es el mismo
+    // porque sqrt es monótona creciente, y nos ahorramos la raíz.
+    double distanciaCuadrada(int i, int j) const;
+
     // Vacía todos los datos (útil al cargar una nueva instancia).
     void limpiar();
 

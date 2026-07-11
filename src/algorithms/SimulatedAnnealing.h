@@ -2,7 +2,8 @@
 //  SimulatedAnnealing.h
 //  ----------------------------------------------------------------------------
 //  Metaheurística de Recocido Simulado con vecindad 2-opt intra-ruta.
-//  Complejidad temporal:  O(N_iter)  ~  O(1) respecto a n con delta incremental.
+//  Cada movimiento evalúa su costo en O(1): solo mira las dos aristas que
+//  cambian, no recalcula el costo total de la solución.
 //  Complejidad espacial:  O(n)
 //
 //  Parámetros por defecto (según el informe):
@@ -34,9 +35,14 @@ private:
     double m_alpha;
     double m_Tmin;
 
-    // Aplica un intercambio 2-opt sobre una ruta elegida al azar.
-    // Devuelve una NUEVA solución vecina (no modifica la original).
-    Solucion aplicar2Opt(const Solucion& sol);
+    // Elige una ruta y dos posiciones i<j al azar dentro de ella, invierte el
+    // segmento [i, j] IN-PLACE sobre 'sol' y devuelve el delta de costo real
+    // (solo mirando las 2 aristas rotas y las 2 nuevas, sin recorrer la ruta).
+    // Si no hay ninguna ruta elegible, deja 'sol' intacta y devuelve delta=0.
+    // idxRuta/i/j quedan seteados con el movimiento aplicado, para poder
+    // revertirlo (reversar el mismo segmento) si el caller lo rechaza.
+    double aplicar2Opt(const Instancia& inst, Solucion& sol,
+                        int& idxRuta, int& i, int& j);
 };
 
 #endif // SIMULATEDANNEALING_H

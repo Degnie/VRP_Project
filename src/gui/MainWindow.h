@@ -19,6 +19,10 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
+#include <QFutureWatcher>
+#include <QString>
+#include <functional>
+#include <vector>
 #include "../core/Instancia.h"
 #include "../core/Solucion.h"
 
@@ -28,6 +32,17 @@ class QTextEdit;
 class QLabel;
 class QLineEdit;
 class RouteView;
+
+// Resultado de correr UN algoritmo (usado tanto para una corrida simple
+// como para cada rama de "Comparar ambos"). Si algo sale mal (p.ej. una
+// instancia con demanda > Q), 'error' queda con el mensaje y 'solucion' vacía.
+struct ResultadoAlgoritmo {
+    QString  etiqueta;
+    QString  nombreAlgoritmo;
+    Solucion solucion;
+    double   ms = 0.0;
+    QString  error;
+};
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -44,6 +59,9 @@ private slots:
     void onEjecutarSA();
     void onCompararAlgoritmos();
 
+    // Se dispara en el hilo de la UI cuando el cálculo en background termina.
+    void onCalculoTerminado();
+
 private:
     // Construcción de la interfaz (llamada desde el constructor).
     void construirInterfaz();
@@ -55,13 +73,19 @@ private:
     // Escribe una línea en el panel de resultados.
     void log(const QString& linea);
 
-    // Ejecuta un algoritmo y devuelve tiempo (ms) y solución obtenida.
-    void ejecutarYMostrar(const QString& etiqueta,
-                          class IVRPSolver* solver);
+    // Lanza 'trabajo' en un hilo secundario (QtConcurrent) y programa
+    // onCalculoTerminado() para que corra en el hilo de la UI cuando termine.
+    // 'trabajo' recibe una COPIA de la instancia, así el hilo de fondo nunca
+    // toca m_instancia/m_solucion mientras el usuario sigue interactuando.
+    void ejecutarAsync(std::function<std::vector<ResultadoAlgoritmo>(Instancia)> trabajo);
 
-    // Datos del problema y última solución.
+    // Datos del problema y última solución. Solo se leen/escriben desde el
+    // hilo de la UI (el hilo de fondo trabaja sobre su propia copia).
     Instancia m_instancia;
     Solucion  m_solucion;
+
+    QFutureWatcher<std::vector<ResultadoAlgoritmo>> m_watcher;
+    bool m_ejecutando = false;
 
     // Widgets principales.
     QTableWidget* m_tablaClientes;

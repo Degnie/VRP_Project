@@ -25,8 +25,11 @@
 #include <QTextEdit>
 #include <QToolBar>
 #include <QVBoxLayout>
+#include <QtConcurrent/QtConcurrent>
 
+#include <algorithm>
 #include <chrono>
+#include <stdexcept>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -42,6 +45,8 @@ MainWindow::MainWindow(QWidget* parent)
     setWindowTitle("VRP Solver — Greedy vs Simulated Annealing");
     resize(1200, 750);
     construirInterfaz();
+    connect(&m_watcher, &QFutureWatcher<std::vector<ResultadoAlgoritmo>>::finished,
+            this, &MainWindow::onCalculoTerminado);
     statusBar()->showMessage("Listo. Carga una instancia o agrega clientes manualmente.");
 }
 
@@ -230,13 +235,35 @@ void MainWindow::onLimpiar() {
     log("Todo limpio. Solo queda el depósito.");
 }
 
+// Corre 'alg' sobre 'inst' midiendo tiempo, y atrapa cualquier excepción
+// (p.ej. GreedyNN::resolver ante una demanda > Q) para que un dato de entrada
+// hostil no tumbe el hilo de fondo.
+template <typename Alg>
+static ResultadoAlgoritmo correr(const QString& etiqueta, const Instancia& inst) {
+    ResultadoAlgoritmo r;
+    r.etiqueta = etiqueta;
+    Alg alg;
+    r.nombreAlgoritmo = QString::fromStdString(alg.nombre());
+    using namespace std::chrono;
+    try {
+        auto t0 = high_resolution_clock::now();
+        r.solucion = alg.resolver(inst);
+        auto t1 = high_resolution_clock::now();
+        r.ms = duration<double, std::milli>(t1 - t0).count();
+    } catch (const std::exception& e) {
+        r.error = QString::fromStdString(e.what());
+    }
+    return r;
+}
+
 void MainWindow::onEjecutarGreedy() {
     if (m_instancia.cantidadClientes() == 0) {
         QMessageBox::information(this, "Sin clientes", "Agrega o carga clientes primero.");
         return;
     }
-    GreedyNN alg;
-    ejecutarYMostrar("GREEDY", &alg);
+    ejecutarAsync([](Instancia inst) {
+        return std::vector<ResultadoAlgoritmo>{ correr<GreedyNN>("GREEDY", inst) };
+    });
 }
 
 void MainWindow::onEjecutarSA() {
@@ -244,8 +271,9 @@ void MainWindow::onEjecutarSA() {
         QMessageBox::information(this, "Sin clientes", "Agrega o carga clientes primero.");
         return;
     }
-    SimulatedAnnealing alg;
-    ejecutarYMostrar("SA", &alg);
+    ejecutarAsync([](Instancia inst) {
+        return std::vector<ResultadoAlgoritmo>{ correr<SimulatedAnnealing>("SA", inst) };
+    });
 }
 
 void MainWindow::onCompararAlgoritmos() {
@@ -253,27 +281,73 @@ void MainWindow::onCompararAlgoritmos() {
         QMessageBox::information(this, "Sin clientes", "Agrega o carga clientes primero.");
         return;
     }
+    ejecutarAsync([](Instancia inst) {
+        return std::vector<ResultadoAlgoritmo>{
+            correr<GreedyNN>("GREEDY", inst),
+            correr<SimulatedAnnealing>("SA", inst)
+        };
+    });
+}
 
-    // Ejecutamos ambos y comparamos.
-    GreedyNN           g;
-    SimulatedAnnealing sa;
+// -----------------------------------------------------------------------------
+//  Helpers privados
+// -----------------------------------------------------------------------------
+void MainWindow::ejecutarAsync(std::function<std::vector<ResultadoAlgoritmo>(Instancia)> trabajo) {
+    if (m_ejecutando) {
+        statusBar()->showMessage("Ya hay un cálculo en curso, espera a que termine.");
+        return;
+    }
+    m_ejecutando = true;
+    statusBar()->showMessage("Calculando...");
 
-    using namespace std::chrono;
+    // Copiamos la instancia: el hilo de fondo trabaja sobre su propia copia,
+    // así el usuario puede seguir usando la GUI sin pisar m_instancia.
+    Instancia copia = m_instancia;
+    QFuture<std::vector<ResultadoAlgoritmo>> future =
+        QtConcurrent::run([trabajo, copia]() { return trabajo(copia); });
+    m_watcher.setFuture(future);
+}
 
-    auto t0 = high_resolution_clock::now();
-    Solucion solG = g.resolver(m_instancia);
-    auto t1 = high_resolution_clock::now();
-    double msG   = duration<double, std::milli>(t1 - t0).count();
-    double costG = solG.costoTotal(m_instancia);
+void MainWindow::onCalculoTerminado() {
+    m_ejecutando = false;
+    statusBar()->showMessage("Listo.");
 
-    auto t2 = high_resolution_clock::now();
-    Solucion solSA = sa.resolver(m_instancia);
-    auto t3 = high_resolution_clock::now();
-    double msSA   = duration<double, std::milli>(t3 - t2).count();
-    double costSA = solSA.costoTotal(m_instancia);
+    std::vector<ResultadoAlgoritmo> resultados = m_watcher.result();
 
-    // Mostrar la mejor solución en el mapa.
-    Solucion mejor = (costSA < costG) ? solSA : solG;
+    for (const ResultadoAlgoritmo& r : resultados) {
+        if (!r.error.isEmpty()) {
+            QMessageBox::critical(this, "Error al resolver",
+                QString("[%1] %2").arg(r.etiqueta, r.error));
+        }
+    }
+    resultados.erase(std::remove_if(resultados.begin(), resultados.end(),
+        [](const ResultadoAlgoritmo& r) { return !r.error.isEmpty(); }), resultados.end());
+    if (resultados.empty()) return;
+
+    if (resultados.size() == 1) {
+        const ResultadoAlgoritmo& r = resultados[0];
+        double cost = r.solucion.costoTotal(m_instancia);
+        m_solucion = r.solucion;
+        refrescarMapa(r.solucion);
+
+        QString linea = QString("[%1] %2  |  costo = %3  |  tiempo = %4 ms  |  rutas = %5  |  válida = %6")
+            .arg(r.etiqueta, r.nombreAlgoritmo)
+            .arg(cost, 0, 'f', 2)
+            .arg(r.ms,  0, 'f', 2)
+            .arg(r.solucion.cantidadRutas())
+            .arg(r.solucion.esValida(m_instancia) ? "SI" : "NO");
+        log(linea);
+        m_lblResumen->setText(linea);
+        return;
+    }
+
+    // Comparación (Greedy vs SA).
+    const ResultadoAlgoritmo& rg = resultados[0];
+    const ResultadoAlgoritmo& rsa = resultados[1];
+    double costG  = rg.solucion.costoTotal(m_instancia);
+    double costSA = rsa.solucion.costoTotal(m_instancia);
+
+    Solucion mejor = (costSA < costG) ? rsa.solucion : rg.solucion;
     QString  cual  = (costSA < costG) ? "SA" : "Greedy";
     m_solucion = mejor;
     refrescarMapa(mejor);
@@ -282,41 +356,15 @@ void MainWindow::onCompararAlgoritmos() {
 
     log("======= COMPARACION =======");
     log(QString("Greedy:  costo = %1  |  tiempo = %2 ms  |  rutas = %3")
-        .arg(costG, 0, 'f', 2).arg(msG, 0, 'f', 2).arg(solG.cantidadRutas()));
+        .arg(costG, 0, 'f', 2).arg(rg.ms, 0, 'f', 2).arg(rg.solucion.cantidadRutas()));
     log(QString("SA:      costo = %1  |  tiempo = %2 ms  |  rutas = %3")
-        .arg(costSA, 0, 'f', 2).arg(msSA, 0, 'f', 2).arg(solSA.cantidadRutas()));
+        .arg(costSA, 0, 'f', 2).arg(rsa.ms, 0, 'f', 2).arg(rsa.solucion.cantidadRutas()));
     log(QString("Mejora del SA sobre Greedy: %1 %%").arg(mejora, 0, 'f', 2));
     log(QString("Mostrando en el mapa la mejor solución (%1).").arg(cual));
 
     m_lblResumen->setText(
         QString("COMPARACION → Greedy: %1  |  SA: %2  |  Mejora SA: %3 %%")
         .arg(costG, 0, 'f', 2).arg(costSA, 0, 'f', 2).arg(mejora, 0, 'f', 2));
-}
-
-// -----------------------------------------------------------------------------
-//  Helpers privados
-// -----------------------------------------------------------------------------
-void MainWindow::ejecutarYMostrar(const QString& etiqueta, IVRPSolver* solver) {
-    using namespace std::chrono;
-
-    auto t0 = high_resolution_clock::now();
-    Solucion sol = solver->resolver(m_instancia);
-    auto t1 = high_resolution_clock::now();
-    double ms   = duration<double, std::milli>(t1 - t0).count();
-    double cost = sol.costoTotal(m_instancia);
-
-    m_solucion = sol;
-    refrescarMapa(sol);
-
-    QString linea = QString("[%1] %2  |  costo = %3  |  tiempo = %4 ms  |  rutas = %5  |  válida = %6")
-        .arg(etiqueta)
-        .arg(QString::fromStdString(solver->nombre()))
-        .arg(cost, 0, 'f', 2)
-        .arg(ms,   0, 'f', 2)
-        .arg(sol.cantidadRutas())
-        .arg(sol.esValida(m_instancia) ? "SI" : "NO");
-    log(linea);
-    m_lblResumen->setText(linea);
 }
 
 void MainWindow::refrescarTabla() {
@@ -332,7 +380,9 @@ void MainWindow::refrescarTabla() {
 }
 
 void MainWindow::refrescarMapa(const Solucion& sol) {
-    m_mapa->mostrar(m_instancia, sol);
+    // La instancia no cambió (solo la solución), así que reusamos el
+    // bounding box ya calculado en vez de recorrer las coordenadas de nuevo.
+    m_mapa->mostrarSolucion(sol);
 }
 
 void MainWindow::log(const QString& linea) {

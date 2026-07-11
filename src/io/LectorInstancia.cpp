@@ -3,6 +3,7 @@
 // ============================================================================
 #include "LectorInstancia.h"
 
+#include <exception>
 #include <fstream>
 #include <sstream>
 #include <vector>
@@ -38,53 +39,76 @@ bool LectorInstancia::cargar(const std::string& rutaArchivo,
 
     std::string linea;
     std::string seccion = "";   // qué sección estamos leyendo
+    int         numLinea = 0;
 
-    while (std::getline(f, linea)) {
-        std::string t = trim(linea);
-        if (t.empty()) continue;
+    // Límite defensivo: un archivo corrupto no debería poder pedirnos que
+    // reservemos una cantidad absurda de memoria.
+    const int DIMENSION_MAXIMA = 1'000'000;
 
-        // Palabras clave: activan una sección o guardan un valor.
-        if (t.rfind("NAME", 0) == 0) {
-            size_t p = t.find(':');
-            if (p != std::string::npos) nombre = trim(t.substr(p + 1));
-            continue;
-        }
-        if (t.rfind("DIMENSION", 0) == 0) {
-            size_t p = t.find(':');
-            if (p != std::string::npos) dimension = std::stoi(trim(t.substr(p + 1)));
-            xs.assign(dimension, 0.0);
-            ys.assign(dimension, 0.0);
-            demandas.assign(dimension, 0);
-            continue;
-        }
-        if (t.rfind("CAPACITY", 0) == 0) {
-            size_t p = t.find(':');
-            if (p != std::string::npos) capacidad = std::stoi(trim(t.substr(p + 1)));
-            continue;
-        }
-        if (t == "NODE_COORD_SECTION") { seccion = "COORD";  continue; }
-        if (t == "DEMAND_SECTION")     { seccion = "DEMAND"; continue; }
-        if (t == "EOF")                 break;
+    try {
+        while (std::getline(f, linea)) {
+            ++numLinea;
+            std::string t = trim(linea);
+            if (t.empty()) continue;
 
-        // Datos dentro de una sección.
-        std::istringstream ss(t);
-        if (seccion == "COORD") {
-            int    id;
-            double x, y;
-            if (ss >> id >> x >> y) {
-                int idx = id - 1;    // los archivos usan 1..n; nosotros 0..n-1
-                if (idx >= 0 && idx < dimension) {
-                    xs[idx] = x;
-                    ys[idx] = y;
+            // Palabras clave: activan una sección o guardan un valor.
+            if (t.rfind("NAME", 0) == 0) {
+                size_t p = t.find(':');
+                if (p != std::string::npos) nombre = trim(t.substr(p + 1));
+                continue;
+            }
+            if (t.rfind("DIMENSION", 0) == 0) {
+                size_t p = t.find(':');
+                if (p == std::string::npos) {
+                    error = "DIMENSION mal formada en la linea " + std::to_string(numLinea) + ".";
+                    return false;
+                }
+                dimension = std::stoi(trim(t.substr(p + 1)));
+                if (dimension <= 0 || dimension > DIMENSION_MAXIMA) {
+                    error = "DIMENSION fuera de rango en la linea " + std::to_string(numLinea) + ".";
+                    return false;
+                }
+                xs.assign(dimension, 0.0);
+                ys.assign(dimension, 0.0);
+                demandas.assign(dimension, 0);
+                continue;
+            }
+            if (t.rfind("CAPACITY", 0) == 0) {
+                size_t p = t.find(':');
+                if (p == std::string::npos) {
+                    error = "CAPACITY mal formada en la linea " + std::to_string(numLinea) + ".";
+                    return false;
+                }
+                capacidad = std::stoi(trim(t.substr(p + 1)));
+                continue;
+            }
+            if (t == "NODE_COORD_SECTION") { seccion = "COORD";  continue; }
+            if (t == "DEMAND_SECTION")     { seccion = "DEMAND"; continue; }
+            if (t == "EOF")                 break;
+
+            // Datos dentro de una sección.
+            std::istringstream ss(t);
+            if (seccion == "COORD") {
+                int    id;
+                double x, y;
+                if (ss >> id >> x >> y) {
+                    int idx = id - 1;    // los archivos usan 1..n; nosotros 0..n-1
+                    if (idx >= 0 && idx < dimension) {
+                        xs[idx] = x;
+                        ys[idx] = y;
+                    }
+                }
+            } else if (seccion == "DEMAND") {
+                int id, d;
+                if (ss >> id >> d) {
+                    int idx = id - 1;
+                    if (idx >= 0 && idx < dimension) demandas[idx] = d;
                 }
             }
-        } else if (seccion == "DEMAND") {
-            int id, d;
-            if (ss >> id >> d) {
-                int idx = id - 1;
-                if (idx >= 0 && idx < dimension) demandas[idx] = d;
-            }
         }
+    } catch (const std::exception& e) {
+        error = "Error al parsear la linea " + std::to_string(numLinea) + ": " + e.what();
+        return false;
     }
 
     // Validaciones mínimas.

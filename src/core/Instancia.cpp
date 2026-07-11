@@ -52,12 +52,15 @@ const std::string& Instancia::nombre() const {
 }
 
 double Instancia::distancia(int i, int j) const {
-    // Distancia euclidiana: sqrt( (xi-xj)^2 + (yi-yj)^2 )
+    return std::sqrt(distanciaCuadrada(i, j));
+}
+
+double Instancia::distanciaCuadrada(int i, int j) const {
     const Cliente& a = nodo(i);
     const Cliente& b = nodo(j);
     double dx = a.x - b.x;
     double dy = a.y - b.y;
-    return std::sqrt(dx * dx + dy * dy);
+    return dx * dx + dy * dy;
 }
 
 void Instancia::limpiar() {

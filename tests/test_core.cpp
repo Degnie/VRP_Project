@@ -23,14 +23,22 @@
 
 #include <chrono>
 #include <iostream>
+#include <stdexcept>
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        std::cerr << "Uso: " << argv[0] << " <ruta_al_archivo.vrp>\n";
+        return 1;
+    }
+
     Instancia inst;
     std::string err;
-    if (!LectorInstancia::cargar("data/ejemplo_10.vrp", inst, err)) {
+    if (!LectorInstancia::cargar(argv[1], inst, err)) {
         std::cerr << "Error: " << err << "\n";
         return 1;
     }
+
+    try {
     std::cout << "Instancia: " << inst.nombre()
               << "  n=" << inst.cantidadClientes()
               << "  Q=" << inst.capacidad() << "\n\n";
@@ -73,5 +81,10 @@ int main() {
 
     double mejora = (sg.costoTotal(inst) - ssa.costoTotal(inst)) / sg.costoTotal(inst) * 100.0;
     std::cout << "\nMejora SA vs Greedy: " << mejora << " %\n";
+    } catch (const std::exception& e) {
+        // p.ej. GreedyNN::resolver ante un cliente con demanda > Q.
+        std::cerr << "Error al resolver: " << e.what() << "\n";
+        return 1;
+    }
     return 0;
 }
