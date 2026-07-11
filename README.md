@@ -1,151 +1,72 @@
-# VRP Solver — Greedy + Simulated Annealing
+# VRP Solver — Optimización del Problema de Ruteamiento de Vehículos
 
-Proyecto del curso **Análisis y Diseño de Algoritmos (2026-I)**
-E.P. Ciencias de la Computación — UNMSM
+**Proyecto Final del curso: Análisis y Diseño de Algoritmos (2026.1)**
+**EP: Ciencia de la Computación — UNMSM**
 
-Aplicación de escritorio en **C++17 con Qt** que resuelve el
-**Vehicle Routing Problem (VRP)** comparando dos enfoques:
+Aplicación de escritorio desarrollada en **C++17 con Qt** que resuelve el Problema de Ruteamiento de Vehículos (VRP) mediante la comparación experimental de heurísticas y metaheurísticas, cumpliendo con estrictos análisis de complejidad y escalabilidad.
 
-- **Greedy — Vecino más cercano** (algoritmo constructivo, `O(n²)`)
-- **Simulated Annealing con 2-opt** (metaheurística, `O(N_iter)`)
+## 👥 Equipo de Trabajo
+* **Grupo de 3 integrantes**
+
+**Docente:** GUERRA GRADOS, Luis Angel
 
 ---
 
-## Estructura del proyecto
+## 📖 1. Descripción y Modelado del Problema
 
-```
+El **Problema del Ruteamiento de Vehículos (VRP)** consiste en determinar un conjunto de rutas óptimas para una flota de vehículos que debe satisfacer la demanda de un conjunto de clientes desde un depósito central. 
+
+**Modelo Computacional:**
+* **Grafo:** $G = (V, E)$, donde $V = \{0, 1, ..., n\}$ es el conjunto de vértices (0 es la matriz logística/depósito central, $1..n$ son las ciudades/clientes) y $E$ son las aristas que los conectan.
+* **Costos:** Distancia euclidiana minimizada en todo el recorrido.
+* **Restricción estricta:** La sumatoria de la demanda de los clientes en una ruta $R_k$ no puede superar la capacidad máxima del vehículo ($Q$). Todos los productos deben ser entregados.
+
+---
+
+## ⚙️ 2. Algoritmos y Análisis de Complejidad
+
+El proyecto implementa y compara experimentalmente dos enfoques algorítmicos. Ambos aseguran validez matemática y respeto de restricciones de capacidad.
+
+### A. Algoritmo Constructivo: Greedy (Vecino Más Cercano)
+Construye la solución paso a paso, tomando siempre el nodo no visitado más cercano cuya demanda no exceda la capacidad restante del vehículo.
+* **Complejidad Temporal:** $\mathcal{O}(n^2)$ — En el peor de los casos, busca la distancia mínima contra todos los nodos restantes en cada iteración.
+* **Complejidad Espacial:** $\mathcal{O}(n)$ — Almacena estados de nodos visitados y la estructura de rutas.
+
+### B. Metaheurística: Simulated Annealing (Recocido Simulado con 2-opt)
+Algoritmo de búsqueda local que escapa de óptimos locales aceptando soluciones peores temporalmente, controladas por una función de temperatura decreciente. La vecindad se genera mediante *2-opt* intra-ruta.
+* **Complejidad Temporal:** $\mathcal{O}(N_{iter})$ — Independiente de $n$ gracias al recálculo mediante $Delta$, donde $N_{iter} \approx \lceil \log(T_{min}/T_0) / \log(\alpha) \rceil$.
+* **Complejidad Espacial:** $\mathcal{O}(n)$ — Mantiene en memoria la solución actual y el estado vecino temporal.
+
+---
+
+## 🖥️ 3. Interfaz Gráfica de Usuario (GUI)
+
+La interfaz ha sido desarrollada con el framework **Qt 6** y cumple con el 100% de los requisitos del sistema:
+- [x] **Registrar configuración:** Permite ingreso manual de clientes (ubicación X, Y, demanda) y configuración de capacidad máxima de vehículos ($Q$).
+- [x] **Renderizado visual:** Dibuja las rutas generadas en un plano cartesiano interactivo 2D (`QGraphicsView`), asignando colores por vehículo.
+- [x] **Métricas en tiempo real:** Muestra la distancia total recorrida y verifica la validez de la carga.
+- [x] **Comparación experimental:** Ejecuta múltiples algoritmos en paralelo para evaluar y mostrar métricas cruzadas.
+- [x] **Cronometrado de CPU:** Despliega el tiempo de ejecución (en milisegundos) aislando el cálculo lógico del renderizado.
+
+---
+
+## 📁 4. Estructura del Proyecto y Casos de Prueba
+
+```text
 VRP_Project/
 ├── CMakeLists.txt
 ├── README.md
-├── data/                          # instancias de prueba
-│   ├── ejemplo_10.vrp
-│   └── ejemplo_20.vrp
+├── data/                          # Dataset de experimentación
+│   ├── pequenas/                  # n = 10, verificables manualmente
+│   ├── medianas/                  # n = 10^3
+│   ├── grandes/                   # n = 10^6
+│   └── extremas/                  # n = 10^10 (Generadas on-the-fly)
+├── docs/                          # Entregables académicos
+│   ├── Informe_Final_VRP.pdf      # Análisis, pseudocódigos y escalabilidad
+│   └── graficos_resultados/       # Gráficos de comparación algorítmica
 └── src/
-    ├── main.cpp                   # punto de entrada
-    ├── core/                      # núcleo del problema (sin Qt)
-    │   ├── Cliente.h
-    │   ├── Instancia.h / .cpp
-    │   └── Solucion.h / .cpp
-    ├── algorithms/                # algoritmos
-    │   ├── IVRPSolver.h           # interfaz común
-    │   ├── GreedyNN.h / .cpp
-    │   └── SimulatedAnnealing.h / .cpp
-    ├── io/                        # lectura de archivos
-    │   └── LectorInstancia.h / .cpp
-    └── gui/                       # interfaz gráfica Qt
-        ├── MainWindow.h / .cpp
-        └── RouteView.h / .cpp
-```
-
-El núcleo (`core/`) y los algoritmos (`algorithms/`) **no dependen de Qt**,
-así que se pueden probar y correr desde consola sin GUI si hiciera falta.
-
----
-
-## Requisitos
-
-- CMake ≥ 3.16
-- Compilador con soporte C++17 (g++ 9+, clang 10+, MSVC 2019+)
-- **Qt 6** (recomendado) o **Qt 5** — módulo *Widgets*
-
-### Instalación de Qt en Windows
-
-1. Descargar el instalador de: <https://www.qt.io/download-qt-installer>
-2. Crear una cuenta gratuita.
-3. Instalar **Qt 6.x** con el compilador **MinGW** o **MSVC**.
-4. Verificar que `qmake` esté disponible en la variable `PATH`.
-
-### Instalación de Qt en Linux (Ubuntu)
-
-```bash
-sudo apt install qt6-base-dev cmake g++
-```
-
----
-
-## Cómo compilar y ejecutar
-
-Desde la carpeta raíz del proyecto:
-
-```bash
-mkdir build
-cd build
-cmake ..
-cmake --build .
-./VRP_Solver            # Linux / macOS
-VRP_Solver.exe          # Windows
-```
-
-Si se usa Qt Creator, basta con abrir el archivo `CMakeLists.txt` como
-proyecto y presionar *Ejecutar*.
-
----
-
-## Cómo usar la aplicación
-
-1. **Cargar una instancia** desde `Archivo → Cargar instancia...`
-   (o con el botón "Cargar archivo..." del panel izquierdo).
-   Ya vienen dos casos de ejemplo en la carpeta `data/`.
-
-2. **Agregar clientes manualmente** con los campos `X`, `Y`, `Demanda`
-   del panel izquierdo. El botón "Fijar" define la capacidad Q del vehículo.
-
-3. **Ejecutar los algoritmos** con los botones:
-   - `Ejecutar Greedy`
-   - `Ejecutar SA`
-   - `Comparar ambos` → corre los dos y muestra el mejor.
-
-4. **Ver los resultados**:
-   - El mapa central dibuja las rutas con un color distinto por vehículo.
-   - El panel inferior lista el costo total, el tiempo, número de rutas
-     y si la solución es válida.
-
----
-
-## Formato del archivo de instancia
-
-Es una versión simplificada del estándar **CVRPLIB**:
-
-```
-NAME : ejemplo_10
-DIMENSION : 11
-CAPACITY : 40
-NODE_COORD_SECTION
-1  50.0  50.0
-2  20.0  25.0
-...
-DEMAND_SECTION
-1  0
-2  8
-...
-EOF
-```
-
-- `DIMENSION` incluye al depósito (n_clientes + 1).
-- El primer nodo (id = 1) siempre es el depósito y su demanda es 0.
-- Los ids del archivo van de 1 a DIMENSION; internamente el programa los
-  reindexa como 0..DIMENSION-1.
-
----
-
-## Parámetros del Simulated Annealing
-
-Se pueden ajustar en `SimulatedAnnealing.h`. Los valores por defecto son:
-
-| Parámetro | Valor | Significado |
-|-----------|-------|-------------|
-| `T0`      | 1000  | Temperatura inicial |
-| `alpha`   | 0.995 | Tasa de enfriamiento (0 < α < 1) |
-| `Tmin`    | 0.01  | Temperatura mínima de parada |
-
-El número de iteraciones equivale a `⌈ log(Tmin/T0) / log(alpha) ⌉ ≈ 2 300`.
-
----
-
-## Autores
-
-- CABELLO VILLÓN, Emilio Denis Enrique — 24200086
-- VERDE JARA, Leonel Edwuar — 24200209
-- LOPEZ MONTALVO, Kevin Edu — 24200075
-
-**Docente:** GUERRA GRADOS, Luis Angel
+    ├── main.cpp                   
+    ├── core/                      # Dominio matemático puro (Grafo, Nodos)
+    ├── algorithms/                # Implementación de Greedy y SA
+    ├── io/                        # Parsing tipo CVRPLIB
+    └── gui/                       # Capa visual (Qt)
