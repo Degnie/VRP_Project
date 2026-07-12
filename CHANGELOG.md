@@ -1,5 +1,38 @@
 # Changelog
 
+## [Sin publicar] — 2026-07-11 (iteración 4)
+
+### Cambios (solo interfaz — sin tocar núcleo/algoritmos)
+
+- **Tema visual vía QSS** (`resources/style.qss`, embebido por recurso Qt):
+  radios de 6px, paleta neutra, CTA "Comparar ambos" en esmeralda
+  (`#00875A`, mismo tono que usa RouteView), "Limpiar todo" con bajo peso
+  visual (sin relleno, borde sutil).
+- **Panel izquierdo reorganizado en `QTabWidget`**: "Datos y Configuración"
+  (capacidad, agregar cliente, tabla, cargar/limpiar) y "Simulación"
+  (Greedy/SA/Comparar).
+- **Accesibilidad**: cada campo (X, Y, Demanda, Q) tiene un `QLabel` buddy
+  y `setAccessibleName()`; orden de tabulación explícito vía
+  `setTabOrder()`.
+- **Íconos SVG** (`resources/icons/`, vía `.qrc` + módulo Qt Svg) en los
+  botones de cargar/limpiar/ejecutar/comparar.
+- **Overlay de progreso**: `QProgressBar` indeterminado, hijo directo del
+  mapa (no del layout), reposicionado con un `eventFilter` en cada resize;
+  aparece en `ejecutarAsync()` y se oculta en `onCalculoTerminado()`.
+- **Log con HTML**: `log()` inyecta badges (✔ VÁLIDA / ✘ INVÁLIDA / ✘ ERROR)
+  sobre los patrones de texto conocidos, en vez de texto plano.
+- **RouteView**: paleta Okabe-Ito (colorblind-safe) + 4 estilos de línea
+  cíclicos (sólida/rayada/punteada/raya-punto) para que las rutas no
+  dependan solo del color; depósito redibujado como rombo navy con anillo
+  blanco (antes, cuadrado negro liso); LOD adaptativo en `wheelEvent()`
+  (desactiva antialiasing durante el zoom, lo reactiva ~100ms después de
+  parar, vía `QTimer` single-shot).
+
+### Rechazado / fuera de alcance
+
+- Nada rechazado explícitamente en esta iteración — el prompt fue
+  estrictamente de interfaz y no tocó factorías ni despliegue.
+
 ## [Sin publicar] — 2026-07-11 (iteración 3)
 
 ### Cambios

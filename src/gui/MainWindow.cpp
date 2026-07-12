@@ -10,17 +10,24 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QEvent>
+#include <QFile>
 #include <QFileDialog>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QProgressBar>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QTabWidget>
 #include <QTableView>
 #include <QTextEdit>
 #include <QToolBar>
@@ -39,6 +46,7 @@ MainWindow::MainWindow(QWidget* parent)
     , m_modeloClientes(nullptr)
     , m_mapa(nullptr)
     , m_panelResultados(nullptr)
+    , m_progreso(nullptr)
     , m_editX(nullptr)
     , m_editY(nullptr)
     , m_editDemanda(nullptr)
@@ -47,6 +55,13 @@ MainWindow::MainWindow(QWidget* parent)
 {
     setWindowTitle("VRP Solver — Greedy vs Simulated Annealing");
     resize(1200, 750);
+
+    // QSS embebido vía recurso Qt (resources/style.qss, compilado con AUTORCC).
+    QFile hojaEstilos(":/style.qss");
+    if (hojaEstilos.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        setStyleSheet(QString::fromUtf8(hojaEstilos.readAll()));
+    }
+
     construirInterfaz();
     connect(&m_watcher, &QFutureWatcher<std::vector<ResultadoAlgoritmo>>::finished,
             this, &MainWindow::onCalculoTerminado);
@@ -73,15 +88,23 @@ void MainWindow::construirInterfaz() {
     connect(actSA, &QAction::triggered, this, &MainWindow::onEjecutarSA);
     connect(actC,  &QAction::triggered, this, &MainWindow::onCompararAlgoritmos);
 
-    // ---------- Panel izquierdo ----------
-    m_panelIzq = new QWidget(this);
-    QVBoxLayout* layIzq = new QVBoxLayout(m_panelIzq);
+    // ---------- Panel izquierdo: pestañas ----------
+    QTabWidget* tabs = new QTabWidget(this);
+    m_panelIzq = tabs;   // se deshabilita como bloque durante un cálculo
+
+    // ===== Pestaña 1: Datos y Configuración =====
+    QWidget* tabDatos = new QWidget(tabs);
+    QVBoxLayout* layDatos = new QVBoxLayout(tabDatos);
 
     // Grupo: capacidad del vehículo.
-    QGroupBox* boxCap = new QGroupBox("Capacidad del vehículo (Q)", m_panelIzq);
+    QGroupBox* boxCap = new QGroupBox("Capacidad del vehículo (Q)", tabDatos);
     QHBoxLayout* layCap = new QHBoxLayout(boxCap);
+    QLabel* lblCap = new QLabel("Q:", boxCap);
     m_editCapacidad = new QLineEdit("40", boxCap);
+    lblCap->setBuddy(m_editCapacidad);
+    m_editCapacidad->setAccessibleName("Capacidad del vehículo");
     QPushButton* btnFijarCap = new QPushButton("Fijar", boxCap);
+    layCap->addWidget(lblCap);
     layCap->addWidget(m_editCapacidad);
     layCap->addWidget(btnFijarCap);
     connect(btnFijarCap, &QPushButton::clicked, this, [this]() {
@@ -95,17 +118,28 @@ void MainWindow::construirInterfaz() {
         }
     });
 
-    // Grupo: agregar cliente manualmente.
-    QGroupBox* boxNuevo = new QGroupBox("Agregar cliente", m_panelIzq);
+    // Grupo: agregar cliente manualmente. Cada campo con su QLabel-buddy
+    // (clic en la etiqueta enfoca el campo) y un nombre accesible para
+    // lectores de pantalla — los placeholders solos no alcanzan para WCAG.
+    QGroupBox* boxNuevo = new QGroupBox("Agregar cliente", tabDatos);
     QVBoxLayout* layNuevo = new QVBoxLayout(boxNuevo);
 
-    QHBoxLayout* layCampos = new QHBoxLayout();
-    m_editX       = new QLineEdit(boxNuevo);   m_editX->setPlaceholderText("X");
-    m_editY       = new QLineEdit(boxNuevo);   m_editY->setPlaceholderText("Y");
-    m_editDemanda = new QLineEdit(boxNuevo);   m_editDemanda->setPlaceholderText("Demanda");
-    layCampos->addWidget(m_editX);
-    layCampos->addWidget(m_editY);
-    layCampos->addWidget(m_editDemanda);
+    QGridLayout* layCampos = new QGridLayout();
+    QLabel* lblX = new QLabel("X:", boxNuevo);
+    QLabel* lblY = new QLabel("Y:", boxNuevo);
+    QLabel* lblD = new QLabel("Demanda:", boxNuevo);
+    m_editX       = new QLineEdit(boxNuevo);
+    m_editY       = new QLineEdit(boxNuevo);
+    m_editDemanda = new QLineEdit(boxNuevo);
+    lblX->setBuddy(m_editX);
+    lblY->setBuddy(m_editY);
+    lblD->setBuddy(m_editDemanda);
+    m_editX->setAccessibleName("Coordenada X del nuevo cliente");
+    m_editY->setAccessibleName("Coordenada Y del nuevo cliente");
+    m_editDemanda->setAccessibleName("Demanda del nuevo cliente");
+    layCampos->addWidget(lblX, 0, 0); layCampos->addWidget(m_editX, 0, 1);
+    layCampos->addWidget(lblY, 0, 2); layCampos->addWidget(m_editY, 0, 3);
+    layCampos->addWidget(lblD, 0, 4); layCampos->addWidget(m_editDemanda, 0, 5);
 
     QPushButton* btnAgregar = new QPushButton("Agregar", boxNuevo);
     connect(btnAgregar, &QPushButton::clicked, this, &MainWindow::onAgregarCliente);
@@ -117,34 +151,74 @@ void MainWindow::construirInterfaz() {
     // instancias de millones de clientes, la vista solo pide data() para
     // las celdas realmente visibles.
     m_modeloClientes = new ClientesTableModel(this);
-    m_tablaClientes  = new QTableView(m_panelIzq);
+    m_tablaClientes  = new QTableView(tabDatos);
     m_tablaClientes->setModel(m_modeloClientes);
     m_tablaClientes->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     m_tablaClientes->setEditTriggers(QAbstractItemView::NoEditTriggers);
 
-    // Botones de acción.
-    QPushButton* btnLimpiar     = new QPushButton("Limpiar todo",       m_panelIzq);
-    QPushButton* btnCargar      = new QPushButton("Cargar archivo...",  m_panelIzq);
-    QPushButton* btnGreedy      = new QPushButton("Ejecutar Greedy",    m_panelIzq);
-    QPushButton* btnSA          = new QPushButton("Ejecutar SA",        m_panelIzq);
-    QPushButton* btnComparar    = new QPushButton("Comparar ambos",     m_panelIzq);
-    connect(btnLimpiar,  &QPushButton::clicked, this, &MainWindow::onLimpiar);
-    connect(btnCargar,   &QPushButton::clicked, this, &MainWindow::onCargarInstancia);
+    QPushButton* btnCargar  = new QPushButton(QIcon(":/icons/folder-open.svg"), "Cargar archivo...", tabDatos);
+    QPushButton* btnLimpiar = new QPushButton(QIcon(":/icons/trash.svg"), "Limpiar todo", tabDatos);
+    btnLimpiar->setObjectName("btnLimpiar");   // QSS: bajo peso visual (acción destructiva)
+    connect(btnLimpiar, &QPushButton::clicked, this, &MainWindow::onLimpiar);
+    connect(btnCargar,  &QPushButton::clicked, this, &MainWindow::onCargarInstancia);
+
+    layDatos->addWidget(boxCap);
+    layDatos->addWidget(boxNuevo);
+    layDatos->addWidget(m_tablaClientes, 1);
+    layDatos->addWidget(btnCargar);
+    layDatos->addWidget(btnLimpiar);
+
+    // ===== Pestaña 2: Simulación =====
+    QWidget* tabSim = new QWidget(tabs);
+    QVBoxLayout* laySim = new QVBoxLayout(tabSim);
+    QLabel* lblAyuda = new QLabel(
+        "Ejecuta un algoritmo sobre la instancia actual, o compara ambos "
+        "para quedarte con la mejor solución.", tabSim);
+    lblAyuda->setWordWrap(true);
+    lblAyuda->setStyleSheet("color: #607D8B;");
+
+    QPushButton* btnGreedy   = new QPushButton(QIcon(":/icons/play-greedy.svg"), "Ejecutar Greedy", tabSim);
+    QPushButton* btnSA       = new QPushButton(QIcon(":/icons/play-sa.svg"), "Ejecutar Simulated Annealing", tabSim);
+    QPushButton* btnComparar = new QPushButton(QIcon(":/icons/compare.svg"), "Comparar ambos", tabSim);
+    btnComparar->setObjectName("btnComparar");   // QSS: acento esmeralda (CTA)
     connect(btnGreedy,   &QPushButton::clicked, this, &MainWindow::onEjecutarGreedy);
     connect(btnSA,       &QPushButton::clicked, this, &MainWindow::onEjecutarSA);
     connect(btnComparar, &QPushButton::clicked, this, &MainWindow::onCompararAlgoritmos);
 
-    layIzq->addWidget(boxCap);
-    layIzq->addWidget(boxNuevo);
-    layIzq->addWidget(m_tablaClientes, 1);
-    layIzq->addWidget(btnCargar);
-    layIzq->addWidget(btnLimpiar);
-    layIzq->addWidget(btnGreedy);
-    layIzq->addWidget(btnSA);
-    layIzq->addWidget(btnComparar);
+    laySim->addWidget(lblAyuda);
+    laySim->addWidget(btnGreedy);
+    laySim->addWidget(btnSA);
+    laySim->addWidget(btnComparar);
+    laySim->addStretch(1);
+
+    tabs->addTab(tabDatos, "Datos y Configuración");
+    tabs->addTab(tabSim, "Simulación");
+
+    // Orden de tabulación explícito: capacidad → agregar cliente → tabla →
+    // cargar/limpiar (pestaña 1) y greedy → SA → comparar (pestaña 2).
+    setTabOrder(m_editCapacidad, btnFijarCap);
+    setTabOrder(btnFijarCap, m_editX);
+    setTabOrder(m_editX, m_editY);
+    setTabOrder(m_editY, m_editDemanda);
+    setTabOrder(m_editDemanda, btnAgregar);
+    setTabOrder(btnAgregar, m_tablaClientes);
+    setTabOrder(m_tablaClientes, btnCargar);
+    setTabOrder(btnCargar, btnLimpiar);
+    setTabOrder(btnGreedy, btnSA);
+    setTabOrder(btnSA, btnComparar);
 
     // ---------- Panel central: mapa ----------
     m_mapa = new RouteView(this);
+
+    // Overlay de progreso: hijo directo de m_mapa (no del layout), para
+    // flotar SOBRE el mapa en vez de ocupar espacio propio. Se reposiciona
+    // en cada resize de m_mapa vía eventFilter.
+    m_progreso = new QProgressBar(m_mapa);
+    m_progreso->setRange(0, 0);   // indeterminado
+    m_progreso->setTextVisible(false);
+    m_progreso->setFixedHeight(4);
+    m_progreso->hide();
+    m_mapa->installEventFilter(this);
 
     // ---------- Panel inferior: resumen + log ----------
     QWidget* panelInf = new QWidget(this);
@@ -179,6 +253,18 @@ void MainWindow::construirInterfaz() {
         m_instancia.agregarNodo(Cliente(0, 50.0, 50.0, 0));
         refrescarTabla();
     }
+}
+
+// -----------------------------------------------------------------------------
+//  Overlay de progreso: sigue el tamaño de m_mapa (es su hijo directo, no
+//  vive en un layout, así que hay que reposicionarlo a mano).
+// -----------------------------------------------------------------------------
+bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == m_mapa && event->type() == QEvent::Resize) {
+        auto* re = static_cast<QResizeEvent*>(event);
+        m_progreso->setGeometry(0, 0, re->size().width(), 4);
+    }
+    return QMainWindow::eventFilter(watched, event);
 }
 
 // -----------------------------------------------------------------------------
@@ -326,6 +412,8 @@ void MainWindow::ejecutarAsync(std::function<std::vector<ResultadoAlgoritmo>(con
     m_panelIzq->setEnabled(false);
     menuBar()->setEnabled(false);
     statusBar()->showMessage("Calculando...");
+    m_progreso->raise();
+    m_progreso->show();
 
     // Snapshot tomado una sola vez; el shared_ptr se captura por copia en la
     // lambda (copia de puntero, no de los datos) así que QtConcurrent::run
@@ -340,6 +428,7 @@ void MainWindow::onCalculoTerminado() {
     m_ejecutando = false;
     m_panelIzq->setEnabled(true);
     menuBar()->setEnabled(true);
+    m_progreso->hide();
     statusBar()->showMessage("Listo.");
 
     std::vector<ResultadoAlgoritmo> resultados = m_watcher.result();
@@ -348,6 +437,7 @@ void MainWindow::onCalculoTerminado() {
         if (!r.error.isEmpty()) {
             QMessageBox::critical(this, "Error al resolver",
                 QString("[%1] %2").arg(r.etiqueta, r.error));
+            log(QString("[%1] Error: %2").arg(r.etiqueta, r.error.toHtmlEscaped()));
         }
     }
     resultados.erase(std::remove_if(resultados.begin(), resultados.end(),
@@ -432,5 +522,20 @@ void MainWindow::refrescarMapa(const Solucion& sol) {
 }
 
 void MainWindow::log(const QString& linea) {
-    m_panelResultados->append(linea);
+    // QTextEdit::append() ya interpreta HTML automáticamente si lo detecta
+    // (Qt::mightBeRichText). Acá solo inyectamos badges para los patrones
+    // conocidos que arma onCalculoTerminado() — el resto de las líneas pasa
+    // sin tocar.
+    QString formateada = linea;
+    formateada.replace("válida = SI",
+        "<span style=\"background:#00875A;color:white;border-radius:4px;"
+        "padding:1px 6px;font-weight:600;\">&#10003; VÁLIDA</span>");
+    formateada.replace("válida = NO",
+        "<span style=\"background:#D55E00;color:white;border-radius:4px;"
+        "padding:1px 6px;font-weight:600;\">&#10007; INVÁLIDA</span>");
+    if (linea.startsWith("[") && linea.contains("] Error:")) {
+        formateada = "<span style=\"background:#D55E00;color:white;border-radius:4px;"
+                     "padding:1px 6px;font-weight:600;\">&#10007; ERROR</span> " + formateada;
+    }
+    m_panelResultados->append(formateada);
 }

@@ -15,6 +15,9 @@
 #include <QPainterPath>
 #include <QPixmap>
 #include <QPointF>
+#include <QPolygonF>
+#include <QTimer>
+#include <QWheelEvent>
 #include <algorithm>
 #include <limits>
 #include <vector>
@@ -37,6 +40,15 @@ RouteView::RouteView(QWidget* parent)
     setScene(m_escena);
     setRenderHint(QPainter::Antialiasing, true);
     setBackgroundBrush(QBrush(QColor(250, 250, 250)));
+
+    // Reactiva el antialiasing ~100ms después del último evento de rueda
+    // (ver wheelEvent). Single-shot: cada nuevo scroll lo reinicia.
+    m_timerAntialiasing = new QTimer(this);
+    m_timerAntialiasing->setSingleShot(true);
+    connect(m_timerAntialiasing, &QTimer::timeout, this, [this]() {
+        setRenderHint(QPainter::Antialiasing, true);
+        viewport()->update();
+    });
 }
 
 void RouteView::limpiar() {
@@ -45,19 +57,31 @@ void RouteView::limpiar() {
 }
 
 QColor RouteView::colorPorIndice(int i) const {
-    // Paleta simple; se cicla si hay más rutas que colores.
+    // Paleta Okabe-Ito: distinguible para las formas más comunes de
+    // daltonismo (protanopia/deuteranopia/tritanopia). Se cicla si hay más
+    // rutas que colores; el estilo de línea (ver estiloPorIndice) evita que
+    // dos rutas consecutivas dependan solo del color para diferenciarse.
     static const QColor paleta[] = {
-        QColor(220,  50,  50),   // rojo
-        QColor( 50, 120, 220),   // azul
-        QColor( 40, 170,  80),   // verde
-        QColor(230, 150,  30),   // naranja
-        QColor(140,  60, 190),   // morado
-        QColor( 30, 170, 180),   // turquesa
-        QColor(200,  70, 150),   // rosa
-        QColor(120, 100,  50),   // marrón
+        QColor(0x00, 0x72, 0xB2),   // azul
+        QColor(0xE6, 0x9F, 0x00),   // naranja
+        QColor(0x00, 0x9E, 0x73),   // verde azulado
+        QColor(0xCC, 0x79, 0xA7),   // púrpura rojizo
+        QColor(0xD5, 0x5E, 0x00),   // bermellón
+        QColor(0x56, 0xB4, 0xE9),   // azul cielo
+        QColor(0xF0, 0xE4, 0x42),   // amarillo
     };
     const int total = sizeof(paleta) / sizeof(paleta[0]);
     return paleta[i % total];
+}
+
+Qt::PenStyle RouteView::estiloPorIndice(int i) const {
+    // Ciclo de 4 (coprimo con los 7 colores de arriba): la combinación
+    // color+estilo tarda 28 rutas en repetirse, no 7.
+    static const Qt::PenStyle estilos[] = {
+        Qt::SolidLine, Qt::DashLine, Qt::DotLine, Qt::DashDotLine,
+    };
+    const int total = sizeof(estilos) / sizeof(estilos[0]);
+    return estilos[i % total];
 }
 
 // Recorre las coordenadas UNA vez y fija el sceneRect. Solo se llama cuando
@@ -115,6 +139,7 @@ void RouteView::dibujar(const Solucion& sol) {
             const Ruta& ruta = sol.ruta(r);
             QPen pluma(colorPorIndice(r));
             pluma.setWidth(2);
+            pluma.setStyle(estiloPorIndice(r));
 
             for (int k = 0; k + 1 < static_cast<int>(ruta.size()); ++k) {
                 const Cliente& a = m_instancia.nodo(ruta[k]);
@@ -138,6 +163,7 @@ void RouteView::dibujar(const Solucion& sol) {
             }
             QPen pluma(colorPorIndice(r));
             pluma.setWidth(2);
+            pluma.setStyle(estiloPorIndice(r));
             m_escena->addPath(path, pluma);
         }
     }
@@ -148,14 +174,9 @@ void RouteView::dibujar(const Solucion& sol) {
             const Cliente& c = m_instancia.nodo(i);
 
             if (i == 0) {
-                // Depósito: cuadrado grande negro.
-                QPen   pluma(Qt::black);
-                QBrush relleno(QColor(30, 30, 30));
-                const double lado = 12.0;
-                m_escena->addRect(c.x - lado/2, c.y - lado/2, lado, lado, pluma, relleno);
-
-                auto* txt = m_escena->addSimpleText("DEPOSITO");
-                txt->setPos(c.x + 10, c.y - 20);
+                dibujarDeposito(c.x, c.y);
+                auto* txt = m_escena->addSimpleText("DEPÓSITO");
+                txt->setPos(c.x + 12, c.y - 8);
             } else {
                 // Cliente: círculo azul claro.
                 QPen   pluma(QColor(60, 60, 60));
@@ -205,11 +226,32 @@ void RouteView::dibujar(const Solucion& sol) {
 
         // El depósito sí se marca individualmente (un solo item extra).
         const Cliente& dep = m_instancia.nodo(0);
-        const double lado = 12.0;
-        m_escena->addRect(dep.x - lado/2, dep.y - lado/2, lado, lado,
-                          QPen(Qt::black), QBrush(QColor(30, 30, 30)));
+        dibujarDeposito(dep.x, dep.y);
     }
 
     // 3) Ajustar la vista para que todo quepa en pantalla.
     fitInView(m_escena->sceneRect(), Qt::KeepAspectRatio);
+}
+
+void RouteView::dibujarDeposito(double x, double y) {
+    const double r = 9.0;
+    QPolygonF rombo;
+    rombo << QPointF(x, y - r) << QPointF(x + r, y) << QPointF(x, y + r) << QPointF(x - r, y);
+
+    QPen   pluma(QColor(0xFF, 0xFF, 0xFF));
+    pluma.setWidth(2);
+    QBrush relleno(QColor(0x07, 0x3B, 0x4C));   // navy oscuro, no compite con la paleta de rutas
+    m_escena->addPolygon(rombo, pluma, relleno);
+}
+
+void RouteView::wheelEvent(QWheelEvent* event) {
+    // LOD adaptativo: sacrificamos antialiasing durante la interacción para
+    // no perder FPS con miles de nodos en pantalla; se reactiva solo (ver
+    // ctor) cuando el usuario deja de mover la rueda por ~100ms.
+    setRenderHint(QPainter::Antialiasing, false);
+    m_timerAntialiasing->start(100);
+
+    const double factor = (event->angleDelta().y() > 0) ? 1.15 : 1.0 / 1.15;
+    scale(factor, factor);
+    event->accept();
 }

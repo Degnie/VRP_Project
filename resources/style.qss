@@ -1,0 +1,135 @@
+/* ============================================================================
+   style.qss — Tema minimal (Fluent/Material) para VRP Solver.
+   Paleta base neutra + acento esmeralda (Okabe-Ito #009E73, colorblind-safe,
+   el mismo tono que usa RouteView para las rutas) para la acción principal.
+   ============================================================================ */
+
+QMainWindow, QWidget {
+    background: #F7F8FA;
+    color: #263238;
+    font-size: 13px;
+}
+
+/* ---------- Botones ---------- */
+QPushButton {
+    background: #FFFFFF;
+    border: 1px solid #CFD8DC;
+    border-radius: 6px;
+    padding: 7px 14px;
+    color: #263238;
+}
+QPushButton:hover  { background: #EEF1F3; }
+QPushButton:pressed { background: #E3E7EA; }
+QPushButton:disabled {
+    background: #F1F3F4;
+    color: #9AA5AC;
+    border-color: #E0E4E7;
+}
+
+/* CTA principal: "Comparar ambos". Esmeralda, alto contraste con blanco. */
+QPushButton#btnComparar {
+    background: #00875A;
+    border: 1px solid #00714B;
+    color: #FFFFFF;
+    font-weight: 600;
+}
+QPushButton#btnComparar:hover   { background: #00966A; }
+QPushButton#btnComparar:pressed { background: #006B49; }
+
+/* Acciones destructivas/de bajo riesgo: bajo peso visual (sin relleno). */
+QPushButton#btnLimpiar {
+    background: transparent;
+    border: 1px solid #CFD8DC;
+    color: #607D8B;
+}
+QPushButton#btnLimpiar:hover { background: #ECEFF1; color: #455A64; }
+
+/* ---------- Campos de texto ---------- */
+QLineEdit {
+    background: #FFFFFF;
+    border: 1px solid #CFD8DC;
+    border-radius: 6px;
+    padding: 6px 10px;
+    selection-background-color: #00875A;
+    selection-color: white;
+}
+QLineEdit:focus { border: 1px solid #00875A; }
+
+/* ---------- Agrupadores ---------- */
+QGroupBox {
+    border: 1px solid #DCE1E4;
+    border-radius: 6px;
+    margin-top: 14px;
+    padding: 10px 8px 8px 8px;
+    font-weight: 600;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 4px;
+    color: #37474F;
+}
+
+/* ---------- Pestañas ---------- */
+QTabWidget::pane {
+    border: 1px solid #DCE1E4;
+    border-radius: 6px;
+    top: -1px;
+    background: #FFFFFF;
+}
+QTabBar::tab {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 8px 16px;
+    margin-right: 4px;
+    color: #607D8B;
+}
+QTabBar::tab:selected {
+    color: #00875A;
+    border-bottom: 2px solid #00875A;
+    font-weight: 600;
+}
+QTabBar::tab:hover:!selected { color: #37474F; }
+
+/* ---------- Tabla de clientes ---------- */
+QTableView {
+    background: #FFFFFF;
+    border: 1px solid #DCE1E4;
+    border-radius: 6px;
+    gridline-color: #ECEFF1;
+    selection-background-color: #D7F0E6;
+    selection-color: #263238;
+}
+QHeaderView::section {
+    background: #F1F3F4;
+    border: none;
+    border-bottom: 1px solid #DCE1E4;
+    padding: 6px;
+    font-weight: 600;
+    color: #455A64;
+}
+
+/* ---------- Log de resultados ---------- */
+QTextEdit {
+    background: #FFFFFF;
+    border: 1px solid #DCE1E4;
+    border-radius: 6px;
+    padding: 6px;
+}
+
+/* ---------- Barra de progreso (overlay durante el cómputo) ---------- */
+QProgressBar {
+    border: none;
+    border-radius: 3px;
+    background: #DCE1E4;
+}
+QProgressBar::chunk {
+    background: #00875A;
+    border-radius: 3px;
+}
+
+QStatusBar {
+    background: #F1F3F4;
+    border-top: 1px solid #DCE1E4;
+}

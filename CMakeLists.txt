@@ -46,13 +46,14 @@ set(CMAKE_AUTORCC ON)
 
 # ---- Búsqueda de Qt (intenta Qt6 primero, luego Qt5) ----
 # Concurrent: para correr los solvers fuera del hilo de la UI (QtConcurrent::run).
-find_package(Qt6 QUIET COMPONENTS Widgets Concurrent)
+# Svg: para que QIcon cargue los .svg de resources/icons vía el motor de iconos SVG.
+find_package(Qt6 QUIET COMPONENTS Widgets Concurrent Svg)
 if (NOT Qt6_FOUND)
-    find_package(Qt5 REQUIRED COMPONENTS Widgets Concurrent)
-    set(QT_LIBS Qt5::Widgets Qt5::Concurrent)
+    find_package(Qt5 REQUIRED COMPONENTS Widgets Concurrent Svg)
+    set(QT_LIBS Qt5::Widgets Qt5::Concurrent Qt5::Svg)
     message(STATUS "Usando Qt5")
 else()
-    set(QT_LIBS Qt6::Widgets Qt6::Concurrent)
+    set(QT_LIBS Qt6::Widgets Qt6::Concurrent Qt6::Svg)
     message(STATUS "Usando Qt6")
 endif()
 
@@ -70,6 +71,8 @@ set(FUENTES
 
     src/gui/MainWindow.cpp
     src/gui/RouteView.cpp
+
+    resources/resources.qrc
 )
 
 set(CABECERAS

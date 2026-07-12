@@ -5,14 +5,14 @@
 //
 //  Layout:
 //    +--------------------------------------------------+
-//    | [ Barra de botones ]                             |
+//    | [ Menú ]                                         |
 //    +-----------+--------------------------------------+
-//    | Tabla de  |                                      |
-//    | clientes  |          Mapa de rutas               |
-//    |           |          (RouteView)                 |
+//    | Pestañas: |                                      |
+//    | Datos /   |     Mapa de rutas (RouteView)         |
+//    | Simulación|     + overlay de progreso             |
 //    | (izq.)    |                                      |
 //    +-----------+--------------------------------------+
-//    | Panel de resultados / comparación                |
+//    | Resumen + log de resultados (HTML con badges)    |
 //    +--------------------------------------------------+
 // ============================================================================
 #ifndef MAINWINDOW_H
@@ -35,6 +35,9 @@ class QTableView;
 class QTextEdit;
 class QLabel;
 class QLineEdit;
+class QProgressBar;
+class QEvent;
+class QObject;
 class RouteView;
 
 // Resultado de correr UN algoritmo (usado tanto para una corrida simple
@@ -113,6 +116,11 @@ private slots:
     // Se dispara en el hilo de la UI cuando el cálculo en background termina.
     void onCalculoTerminado();
 
+protected:
+    // Reposiciona el overlay de progreso (m_progreso) cuando el mapa cambia
+    // de tamaño — es hijo de m_mapa, no de un layout, así que no se reajusta solo.
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
 private:
     // Construcción de la interfaz (llamada desde el constructor).
     void construirInterfaz();
@@ -146,6 +154,7 @@ private:
     ClientesTableModel*  m_modeloClientes;
     RouteView*           m_mapa;
     QTextEdit*           m_panelResultados;
+    QProgressBar*        m_progreso;   // overlay indeterminado sobre el mapa
 
     // Campos para agregar cliente manualmente.
     QLineEdit* m_editX;

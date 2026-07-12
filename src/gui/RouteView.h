@@ -18,6 +18,9 @@
 #include "../core/Instancia.h"
 #include "../core/Solucion.h"
 
+class QTimer;
+class QWheelEvent;
+
 class RouteView : public QGraphicsView {
     Q_OBJECT
 
@@ -36,8 +39,15 @@ public:
     // Borra el contenido de la escena.
     void limpiar();
 
+protected:
+    // LOD adaptativo: durante el zoom con la rueda, se desactiva el
+    // antialiasing (más FPS con miles de nodos en pantalla) y se reactiva
+    // solo cuando el usuario deja de interactuar (~100ms sin más eventos).
+    void wheelEvent(QWheelEvent* event) override;
+
 private:
     QGraphicsScene* m_escena;
+    QTimer*         m_timerAntialiasing;
 
     Instancia m_instancia;      // última instancia dibujada (para mostrarSolucion)
     bool      m_bboxValido = false;
@@ -45,9 +55,16 @@ private:
 
     void calcularBoundingBox();
     void dibujar(const Solucion& sol);
+    // Marcador del depósito: un rombo (más distinguible que un cuadrado
+    // liso) en un tono navy oscuro, con un anillo claro para que resalte
+    // incluso sobre rutas de colores oscuros.
+    void dibujarDeposito(double x, double y);
 
-    // Devuelve un color distinto para cada índice de ruta (paleta cíclica).
+    // Color de la paleta Okabe-Ito (colorblind-safe) para el índice de ruta.
     QColor colorPorIndice(int i) const;
+    // Estilo de línea (sólida/punteada/rayada/...) para el índice de ruta:
+    // las rutas no dependen solo del color para distinguirse.
+    Qt::PenStyle estiloPorIndice(int i) const;
 };
 
 #endif // ROUTEVIEW_H
