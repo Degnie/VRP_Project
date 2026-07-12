@@ -32,10 +32,10 @@ bool LectorInstancia::cargar(const std::string& rutaArchivo,
     int         dimension = 0;
     int         capacidad = 0;
 
-    // Guardamos temporalmente las coordenadas y demandas para poder combinarlas
-    // al final (los formatos suelen presentarlas en secciones separadas).
-    std::vector<double> xs, ys;
-    std::vector<int>    demandas;
+    // Un solo vector<Cliente> (no 3 vectores paralelos xs/ys/demandas que
+    // duplicarían la huella de memoria hasta el final): NODE_COORD_SECTION y
+    // DEMAND_SECTION escriben directo sobre los mismos Cliente ya reservados.
+    std::vector<Cliente> nodos;
 
     std::string linea;
     std::string seccion = "";   // qué sección estamos leyendo
@@ -68,9 +68,8 @@ bool LectorInstancia::cargar(const std::string& rutaArchivo,
                     error = "DIMENSION fuera de rango en la linea " + std::to_string(numLinea) + ".";
                     return false;
                 }
-                xs.assign(dimension, 0.0);
-                ys.assign(dimension, 0.0);
-                demandas.assign(dimension, 0);
+                nodos.assign(dimension, Cliente());
+                for (int k = 0; k < dimension; ++k) nodos[k].id = k;
                 continue;
             }
             if (t.rfind("CAPACITY", 0) == 0) {
@@ -86,7 +85,8 @@ bool LectorInstancia::cargar(const std::string& rutaArchivo,
             if (t == "DEMAND_SECTION")     { seccion = "DEMAND"; continue; }
             if (t == "EOF")                 break;
 
-            // Datos dentro de una sección.
+            // Datos dentro de una sección: se escriben directo sobre 'nodos',
+            // sin arreglos intermedios.
             std::istringstream ss(t);
             if (seccion == "COORD") {
                 int    id;
@@ -94,15 +94,15 @@ bool LectorInstancia::cargar(const std::string& rutaArchivo,
                 if (ss >> id >> x >> y) {
                     int idx = id - 1;    // los archivos usan 1..n; nosotros 0..n-1
                     if (idx >= 0 && idx < dimension) {
-                        xs[idx] = x;
-                        ys[idx] = y;
+                        nodos[idx].x = x;
+                        nodos[idx].y = y;
                     }
                 }
             } else if (seccion == "DEMAND") {
                 int id, d;
                 if (ss >> id >> d) {
                     int idx = id - 1;
-                    if (idx >= 0 && idx < dimension) demandas[idx] = d;
+                    if (idx >= 0 && idx < dimension && idx != 0) nodos[idx].demanda = d;
                 }
             }
         }
@@ -121,15 +121,12 @@ bool LectorInstancia::cargar(const std::string& rutaArchivo,
         return false;
     }
 
-    // Construcción final de la instancia.
+    // Construcción final de la instancia. El nodo 0 (id=1 en el archivo) es
+    // el depósito; ya quedó con demanda=0 (nunca se escribió arriba).
     inst.setNombre(nombre.empty() ? "sin_nombre" : nombre);
     inst.setCapacidad(capacidad);
 
-    // El nodo 0 (id=1 en el archivo) es el depósito.
-    for (int i = 0; i < dimension; ++i) {
-        Cliente c(i, xs[i], ys[i], (i == 0 ? 0 : demandas[i]));
-        inst.agregarNodo(c);
-    }
+    for (const Cliente& c : nodos) inst.agregarNodo(c);
 
     return true;
 }

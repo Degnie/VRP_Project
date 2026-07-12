@@ -29,10 +29,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <memory>
 #include <stdexcept>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
+    , m_panelIzq(nullptr)
     , m_tablaClientes(nullptr)
     , m_mapa(nullptr)
     , m_panelResultados(nullptr)
@@ -71,11 +73,11 @@ void MainWindow::construirInterfaz() {
     connect(actC,  &QAction::triggered, this, &MainWindow::onCompararAlgoritmos);
 
     // ---------- Panel izquierdo ----------
-    QWidget* panelIzq = new QWidget(this);
-    QVBoxLayout* layIzq = new QVBoxLayout(panelIzq);
+    m_panelIzq = new QWidget(this);
+    QVBoxLayout* layIzq = new QVBoxLayout(m_panelIzq);
 
     // Grupo: capacidad del vehículo.
-    QGroupBox* boxCap = new QGroupBox("Capacidad del vehículo (Q)", panelIzq);
+    QGroupBox* boxCap = new QGroupBox("Capacidad del vehículo (Q)", m_panelIzq);
     QHBoxLayout* layCap = new QHBoxLayout(boxCap);
     m_editCapacidad = new QLineEdit("40", boxCap);
     QPushButton* btnFijarCap = new QPushButton("Fijar", boxCap);
@@ -93,7 +95,7 @@ void MainWindow::construirInterfaz() {
     });
 
     // Grupo: agregar cliente manualmente.
-    QGroupBox* boxNuevo = new QGroupBox("Agregar cliente", panelIzq);
+    QGroupBox* boxNuevo = new QGroupBox("Agregar cliente", m_panelIzq);
     QVBoxLayout* layNuevo = new QVBoxLayout(boxNuevo);
 
     QHBoxLayout* layCampos = new QHBoxLayout();
@@ -110,18 +112,18 @@ void MainWindow::construirInterfaz() {
     layNuevo->addWidget(btnAgregar);
 
     // Tabla de clientes.
-    m_tablaClientes = new QTableWidget(panelIzq);
+    m_tablaClientes = new QTableWidget(m_panelIzq);
     m_tablaClientes->setColumnCount(4);
     m_tablaClientes->setHorizontalHeaderLabels(QStringList() << "ID" << "X" << "Y" << "Demanda");
     m_tablaClientes->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     m_tablaClientes->setEditTriggers(QAbstractItemView::NoEditTriggers);
 
     // Botones de acción.
-    QPushButton* btnLimpiar     = new QPushButton("Limpiar todo",       panelIzq);
-    QPushButton* btnCargar      = new QPushButton("Cargar archivo...",  panelIzq);
-    QPushButton* btnGreedy      = new QPushButton("Ejecutar Greedy",    panelIzq);
-    QPushButton* btnSA          = new QPushButton("Ejecutar SA",        panelIzq);
-    QPushButton* btnComparar    = new QPushButton("Comparar ambos",     panelIzq);
+    QPushButton* btnLimpiar     = new QPushButton("Limpiar todo",       m_panelIzq);
+    QPushButton* btnCargar      = new QPushButton("Cargar archivo...",  m_panelIzq);
+    QPushButton* btnGreedy      = new QPushButton("Ejecutar Greedy",    m_panelIzq);
+    QPushButton* btnSA          = new QPushButton("Ejecutar SA",        m_panelIzq);
+    QPushButton* btnComparar    = new QPushButton("Comparar ambos",     m_panelIzq);
     connect(btnLimpiar,  &QPushButton::clicked, this, &MainWindow::onLimpiar);
     connect(btnCargar,   &QPushButton::clicked, this, &MainWindow::onCargarInstancia);
     connect(btnGreedy,   &QPushButton::clicked, this, &MainWindow::onEjecutarGreedy);
@@ -153,7 +155,7 @@ void MainWindow::construirInterfaz() {
 
     // ---------- Ensamblado con splitters ----------
     QSplitter* splitH = new QSplitter(Qt::Horizontal, this);
-    splitH->addWidget(panelIzq);
+    splitH->addWidget(m_panelIzq);
     splitH->addWidget(m_mapa);
     splitH->setStretchFactor(0, 0);
     splitH->setStretchFactor(1, 1);
@@ -261,7 +263,7 @@ void MainWindow::onEjecutarGreedy() {
         QMessageBox::information(this, "Sin clientes", "Agrega o carga clientes primero.");
         return;
     }
-    ejecutarAsync([](Instancia inst) {
+    ejecutarAsync([](const Instancia& inst) {
         return std::vector<ResultadoAlgoritmo>{ correr<GreedyNN>("GREEDY", inst) };
     });
 }
@@ -271,7 +273,7 @@ void MainWindow::onEjecutarSA() {
         QMessageBox::information(this, "Sin clientes", "Agrega o carga clientes primero.");
         return;
     }
-    ejecutarAsync([](Instancia inst) {
+    ejecutarAsync([](const Instancia& inst) {
         return std::vector<ResultadoAlgoritmo>{ correr<SimulatedAnnealing>("SA", inst) };
     });
 }
@@ -281,7 +283,7 @@ void MainWindow::onCompararAlgoritmos() {
         QMessageBox::information(this, "Sin clientes", "Agrega o carga clientes primero.");
         return;
     }
-    ejecutarAsync([](Instancia inst) {
+    ejecutarAsync([](const Instancia& inst) {
         return std::vector<ResultadoAlgoritmo>{
             correr<GreedyNN>("GREEDY", inst),
             correr<SimulatedAnnealing>("SA", inst)
@@ -292,24 +294,45 @@ void MainWindow::onCompararAlgoritmos() {
 // -----------------------------------------------------------------------------
 //  Helpers privados
 // -----------------------------------------------------------------------------
-void MainWindow::ejecutarAsync(std::function<std::vector<ResultadoAlgoritmo>(Instancia)> trabajo) {
+
+// Busca un resultado por su etiqueta ("GREEDY"/"SA") en vez de asumir un
+// índice fijo — más robusto si el orden de 'resultados' cambia.
+static const ResultadoAlgoritmo* buscarPorEtiqueta(
+    const std::vector<ResultadoAlgoritmo>& resultados, const QString& etiqueta) {
+    for (const ResultadoAlgoritmo& r : resultados) {
+        if (r.etiqueta == etiqueta) return &r;
+    }
+    return nullptr;
+}
+
+void MainWindow::ejecutarAsync(std::function<std::vector<ResultadoAlgoritmo>(const Instancia&)> trabajo) {
     if (m_ejecutando) {
         statusBar()->showMessage("Ya hay un cálculo en curso, espera a que termine.");
         return;
     }
     m_ejecutando = true;
+    // Bloqueamos todo lo que puede mutar m_instancia mientras el hilo de
+    // fondo trabaja sobre su snapshot: si el usuario agregara un cliente o
+    // cargara otra instancia a mitad de cálculo, el resultado terminaría
+    // evaluado (costoTotal/esValida) contra una instancia distinta a la que
+    // el solver realmente resolvió.
+    m_panelIzq->setEnabled(false);
+    menuBar()->setEnabled(false);
     statusBar()->showMessage("Calculando...");
 
-    // Copiamos la instancia: el hilo de fondo trabaja sobre su propia copia,
-    // así el usuario puede seguir usando la GUI sin pisar m_instancia.
-    Instancia copia = m_instancia;
+    // Snapshot tomado una sola vez; el shared_ptr se captura por copia en la
+    // lambda (copia de puntero, no de los datos) así que QtConcurrent::run
+    // no vuelve a duplicar la instancia al empaquetar la tarea.
+    auto snapshot = std::make_shared<const Instancia>(m_instancia);
     QFuture<std::vector<ResultadoAlgoritmo>> future =
-        QtConcurrent::run([trabajo, copia]() { return trabajo(copia); });
+        QtConcurrent::run([trabajo, snapshot]() { return trabajo(*snapshot); });
     m_watcher.setFuture(future);
 }
 
 void MainWindow::onCalculoTerminado() {
     m_ejecutando = false;
+    m_panelIzq->setEnabled(true);
+    menuBar()->setEnabled(true);
     statusBar()->showMessage("Listo.");
 
     std::vector<ResultadoAlgoritmo> resultados = m_watcher.result();
@@ -341,9 +364,12 @@ void MainWindow::onCalculoTerminado() {
         return;
     }
 
-    // Comparación (Greedy vs SA).
-    const ResultadoAlgoritmo& rg = resultados[0];
-    const ResultadoAlgoritmo& rsa = resultados[1];
+    // Comparación (Greedy vs SA), buscadas por etiqueta.
+    const ResultadoAlgoritmo* pg  = buscarPorEtiqueta(resultados, "GREEDY");
+    const ResultadoAlgoritmo* psa = buscarPorEtiqueta(resultados, "SA");
+    if (!pg || !psa) return;   // no debería pasar, pero evita un [] fuera de rango
+    const ResultadoAlgoritmo& rg  = *pg;
+    const ResultadoAlgoritmo& rsa = *psa;
     double costG  = rg.solucion.costoTotal(m_instancia);
     double costSA = rsa.solucion.costoTotal(m_instancia);
 

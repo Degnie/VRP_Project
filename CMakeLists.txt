@@ -34,6 +34,10 @@ else()
     set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
 endif()
 
+# Link Time Optimization en Release, si el compilador la soporta.
+include(CheckIPOSupported)
+check_ipo_supported(RESULT LTO_SOPORTADO)
+
 # Qt necesita generar código extra (MOC) para las clases con Q_OBJECT.
 # Estas tres líneas hacen que CMake lo haga automáticamente.
 set(CMAKE_AUTOMOC ON)
@@ -91,6 +95,14 @@ target_link_libraries(VRP_Solver PRIVATE ${QT_LIBS})
 # Directorios de include (para que #include "..." encuentre los headers).
 target_include_directories(VRP_Solver PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+if(LTO_SOPORTADO)
+    set_property(TARGET VRP_Solver PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+endif()
+
+# ---- Instalación ----
+install(TARGETS VRP_Solver RUNTIME DESTINATION bin)
+install(DIRECTORY data/ DESTINATION share/vrp_solver/data)
+
 # ---- Tests (test_core, sin Qt) ----
 enable_testing()
 
@@ -103,6 +115,9 @@ add_executable(test_core
     src/io/LectorInstancia.cpp
 )
 target_include_directories(test_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+if(LTO_SOPORTADO)
+    set_property(TARGET test_core PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+endif()
 
 add_test(NAME test_core
          COMMAND test_core ${CMAKE_CURRENT_SOURCE_DIR}/data/ejemplo_10.vrp)

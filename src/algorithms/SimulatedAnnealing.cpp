@@ -67,16 +67,15 @@ double SimulatedAnnealing::aplicar2Opt(const Instancia& inst, Solucion& sol,
                                         int& idxRuta, int& i, int& j) {
     if (sol.cantidadRutas() == 0) return 0.0;
 
-    // 1) Elegir una ruta al azar que tenga al menos 4 elementos (0, a, b, 0).
-    std::vector<int> rutasCandidatas;
-    for (int r = 0; r < sol.cantidadRutas(); ++r) {
-        if (static_cast<int>(sol.ruta(r).size()) >= 4) {
-            rutasCandidatas.push_back(r);
-        }
-    }
-    if (rutasCandidatas.empty()) return 0.0;
+    // 1) Elegir una ruta al azar por índice directo (sin construir un vector
+    // de candidatas en cada iteración: en un hot-loop de miles de llamadas
+    // esa asignación dinámica pesa más que el propio cálculo del delta).
+    // Si a la ruta elegida le falta tamaño para un 2-opt real (0,a,b,0),
+    // esta iteración simplemente no genera movimiento (idxRuta = -1).
+    int candidata = randomEntero(0, sol.cantidadRutas() - 1);
+    if (static_cast<int>(sol.ruta(candidata).size()) < 4) return 0.0;
 
-    idxRuta = rutasCandidatas[randomEntero(0, static_cast<int>(rutasCandidatas.size()) - 1)];
+    idxRuta = candidata;
     Ruta& r = sol.ruta(idxRuta);
 
     // 2) Elegir i, j dentro de la ruta (sin incluir los depósitos de los extremos).
@@ -120,7 +119,17 @@ Solucion SimulatedAnnealing::resolver(const Instancia& inst) {
             continue;
         }
 
-        bool aceptar = (delta < 0.0) || (randomReal() < std::exp(-delta / T));
+        // exp(-delta/T): con delta/T muy grande, IEEE 754 ya devuelve 0.0 sin
+        // levantar excepciones, pero acotamos el exponente para no depender
+        // de ese comportamiento de underflow y evitar el cómputo de más.
+        bool aceptar;
+        if (delta < 0.0) {
+            aceptar = true;
+        } else {
+            double exponente = -delta / T;
+            double p = (exponente < -700.0) ? 0.0 : std::exp(exponente);
+            aceptar = randomReal() < p;
+        }
 
         if (aceptar) {
             costoActual += delta;

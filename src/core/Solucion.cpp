@@ -2,7 +2,6 @@
 //  Solucion.cpp
 // ============================================================================
 #include "Solucion.h"
-#include <set>
 #include <stdexcept>
 
 Solucion::Solucion() {}
@@ -47,7 +46,10 @@ double Solucion::costoTotal(const Instancia& inst) const {
 
 bool Solucion::esValida(const Instancia& inst) const {
     // 1) Cada cliente aparece exactamente una vez en toda la solución.
-    std::set<int> vistos;
+    // vector<bool> indexado por id: O(1) por chequeo/inserción y sin la
+    // fragmentación de heap de un std::set (nodo por nodo, con punteros).
+    std::vector<bool> vistos(inst.cantidadNodos(), false);
+    int totalVistos = 0;
 
     for (int i = 0; i < static_cast<int>(m_rutas.size()); ++i) {
         const Ruta& r = m_rutas[i];
@@ -61,15 +63,17 @@ bool Solucion::esValida(const Instancia& inst) const {
         int carga = 0;
         for (int k = 1; k + 1 < static_cast<int>(r.size()); ++k) {
             int idCliente = r[k];
-            if (vistos.count(idCliente) > 0) return false;   // duplicado
-            vistos.insert(idCliente);
+            if (idCliente < 0 || idCliente >= static_cast<int>(vistos.size())) return false;
+            if (vistos[idCliente]) return false;   // duplicado
+            vistos[idCliente] = true;
+            ++totalVistos;
             carga += inst.nodo(idCliente).demanda;
         }
         if (carga > inst.capacidad()) return false;
     }
 
     // 4) La cantidad de clientes visitados debe coincidir con el total.
-    if (static_cast<int>(vistos.size()) != inst.cantidadClientes()) return false;
+    if (totalVistos != inst.cantidadClientes()) return false;
 
     return true;
 }

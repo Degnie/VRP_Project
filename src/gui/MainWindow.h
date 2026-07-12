@@ -22,11 +22,13 @@
 #include <QFutureWatcher>
 #include <QString>
 #include <functional>
+#include <memory>
 #include <vector>
 #include "../core/Instancia.h"
 #include "../core/Solucion.h"
 
 // Declaraciones adelantadas (no hace falta incluir cada header aquí).
+class QWidget;
 class QTableWidget;
 class QTextEdit;
 class QLabel;
@@ -75,12 +77,14 @@ private:
 
     // Lanza 'trabajo' en un hilo secundario (QtConcurrent) y programa
     // onCalculoTerminado() para que corra en el hilo de la UI cuando termine.
-    // 'trabajo' recibe una COPIA de la instancia, así el hilo de fondo nunca
-    // toca m_instancia/m_solucion mientras el usuario sigue interactuando.
-    void ejecutarAsync(std::function<std::vector<ResultadoAlgoritmo>(Instancia)> trabajo);
+    // 'trabajo' recibe la instancia por referencia const sobre un snapshot
+    // (shared_ptr<const Instancia>) tomado una sola vez al lanzar: el hilo
+    // de fondo nunca toca m_instancia/m_solucion directamente, y capturar
+    // el puntero en la lambda no vuelve a copiar los datos.
+    void ejecutarAsync(std::function<std::vector<ResultadoAlgoritmo>(const Instancia&)> trabajo);
 
     // Datos del problema y última solución. Solo se leen/escriben desde el
-    // hilo de la UI (el hilo de fondo trabaja sobre su propia copia).
+    // hilo de la UI (el hilo de fondo trabaja sobre su propio snapshot).
     Instancia m_instancia;
     Solucion  m_solucion;
 
@@ -88,6 +92,7 @@ private:
     bool m_ejecutando = false;
 
     // Widgets principales.
+    QWidget*      m_panelIzq;   // se deshabilita mientras corre un cálculo
     QTableWidget* m_tablaClientes;
     RouteView*    m_mapa;
     QTextEdit*    m_panelResultados;

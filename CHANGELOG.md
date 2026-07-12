@@ -1,5 +1,59 @@
 # Changelog
 
+## [Sin publicar] — 2026-07-11 (iteración 2)
+
+### Cambios
+
+- **`Solucion::esValida()` sin `std::set`.** El chequeo de clientes
+  duplicados usa `std::vector<bool>` indexado por id (O(1) por inserción,
+  sin fragmentar el heap con nodos de árbol) en vez de `std::set<int>`.
+- **SA sin allocation en el hot-loop.** `aplicar2Opt` ya no arma un
+  `std::vector<int>` de rutas candidatas en cada iteración; elige un
+  índice de ruta al azar directo y descarta la iteración (sin movimiento)
+  si esa ruta no alcanza para un 2-opt real. También se acotó el
+  exponente de `std::exp(-delta/T)` para no depender del underflow de
+  punto flotante.
+- **`LectorInstancia` sin vectores temporales duplicados.** `xs`, `ys` y
+  `demandas` (3 arreglos paralelos) se reemplazaron por un único
+  `std::vector<Cliente>` que se llena directo durante el parseo — evita
+  mantener el doble de memoria viva hasta el final de la carga.
+- **Renderizado por lotes (LOD) en `RouteView`.** Con más de 500 nodos,
+  `dibujar()` deja de crear un `QGraphicsLineItem`/`QGraphicsEllipseItem`/
+  `QGraphicsSimpleTextItem` por segmento y por cliente, y en su lugar traza
+  cada ruta como un solo `QGraphicsPathItem` (un `QPainterPath` con todas
+  las líneas) y todos los marcadores de cliente como un único
+  `QGraphicsPathItem` más — de O(n) items a O(rutas). Por debajo del
+  umbral, el dibujo detallado (con etiquetas) se mantiene igual.
+- **Paso de instancia asíncrono sin copias extra.** `MainWindow::ejecutarAsync`
+  toma un único snapshot (`std::make_shared<const Instancia>`) y lo captura
+  por puntero en la lambda de `QtConcurrent::run`, en vez de copiar la
+  `Instancia` otra vez al empaquetar la tarea.
+- **UI bloqueada mientras corre un cálculo.** `m_panelIzq` y la barra de
+  menú se deshabilitan en `ejecutarAsync()` y se reactivan en
+  `onCalculoTerminado()`, para que no se pueda mutar `m_instancia` (cargar
+  otra instancia, agregar un cliente, cambiar Q) mientras el hilo de fondo
+  todavía está resolviendo sobre el snapshot anterior.
+- **Resultados por etiqueta, no por índice.** `onCalculoTerminado()` busca
+  el resultado de "GREEDY"/"SA" por su campo `etiqueta` en vez de asumir
+  `resultados[0]`/`resultados[1]`.
+- **CMake:** `install(TARGETS ... RUNTIME DESTINATION bin)` +
+  `install(DIRECTORY data/ ...)`, y LTO (`INTERPROCEDURAL_OPTIMIZATION`)
+  activado en Release cuando `check_ipo_supported()` lo confirma.
+
+### Rechazado en esta sesión
+
+- **Factory dinámico para los algoritmos** y **automatización de
+  `windeployqt`** — restricción explícita del prompt de esta iteración;
+  se mantiene la misma decisión que en la iteración anterior (indirección
+  sin beneficio real con solo dos algoritmos, y empaquetado fuera del
+  alcance de esta ronda de rendimiento/concurrencia).
+- **Reemplazar la ruta de `add_test(NAME test_core ...)`.** Se pidió
+  "despatearla" por considerarla quemada, pero ya usa
+  `${CMAKE_CURRENT_SOURCE_DIR}/data/ejemplo_10.vrp` — un path absoluto
+  calculado en configure-time, correcto sin importar desde dónde se
+  invoque `ctest` ni dónde esté el directorio de build. No había nada que
+  arreglar ahí; cambiarlo solo habría sido indirección cosmética.
+
 ## [Sin publicar] — 2026-07-11
 
 ### Cambios
