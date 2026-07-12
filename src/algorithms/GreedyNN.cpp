@@ -11,6 +11,7 @@
 //    - Terminamos cuando todos los clientes fueron visitados.
 // ============================================================================
 #include "GreedyNN.h"
+#include <algorithm>
 #include <limits>
 #include <stdexcept>
 #include <vector>
@@ -48,6 +49,11 @@ Solucion GreedyNN::resolver(const Instancia& inst) {
     while (pendientes > 0) {
 
         Ruta rutaActual;
+        // Cota superior real: como cada cliente pide al menos 1 unidad, una
+        // ruta no puede tener más de Q clientes (+2 por los depósitos en
+        // los extremos). Reservar evita realocaciones/copias por doblado
+        // de capacidad a medida que la ruta crece.
+        rutaActual.reserve(std::min(n, Q + 2));
         rutaActual.push_back(0);          // arranca en el depósito
         int capacidadRestante = Q;
         int nodoActual        = 0;
@@ -62,6 +68,8 @@ Solucion GreedyNN::resolver(const Instancia& inst) {
             for (int cliente = 1; cliente < n; ++cliente) {
                 if (visitado[cliente]) continue;
                 int demanda = inst.nodo(cliente).demanda;
+                // Pre-filtro: si la demanda no entra en lo que queda de
+                // capacidad, ni siquiera calculamos su distancia.
                 if (demanda <= capacidadRestante) {
                     double dSq = inst.distanciaCuadrada(nodoActual, cliente);
                     if (dSq < minDistanciaSq) {

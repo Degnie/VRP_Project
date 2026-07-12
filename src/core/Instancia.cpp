@@ -2,6 +2,7 @@
 //  Instancia.cpp
 // ============================================================================
 #include "Instancia.h"
+#include <cassert>
 #include <cmath>
 #include <stdexcept>
 
@@ -33,9 +34,11 @@ const Cliente& Instancia::depot() const {
 }
 
 const Cliente& Instancia::nodo(int i) const {
-    if (i < 0 || i >= static_cast<int>(m_nodos.size())) {
-        throw std::out_of_range("Indice de nodo fuera de rango.");
-    }
+    // Método de alto tráfico (Greedy y SA lo llaman en cada comparación de
+    // distancia). assert() en vez de throw: en Release (NDEBUG) esto se
+    // compila a nada, sin branching extra en el hot-loop; en Debug sigue
+    // atrapando índices inválidos igual que antes.
+    assert(i >= 0 && i < static_cast<int>(m_nodos.size()) && "Indice de nodo fuera de rango.");
     return m_nodos[i];
 }
 

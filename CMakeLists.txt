@@ -95,6 +95,12 @@ target_link_libraries(VRP_Solver PRIVATE ${QT_LIBS})
 # Directorios de include (para que #include "..." encuentre los headers).
 target_include_directories(VRP_Solver PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+# Ruta por defecto de datos: el diálogo "Cargar instancia..." abre acá en
+# vez de a ciegas. Rechazamos automatizar el despliegue (windeployqt) desde
+# CMake, pero esto es solo una constante de compilación, no un paso de build.
+target_compile_definitions(VRP_Solver PRIVATE
+    DEFAULT_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
+
 if(LTO_SOPORTADO)
     set_property(TARGET VRP_Solver PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
 endif()

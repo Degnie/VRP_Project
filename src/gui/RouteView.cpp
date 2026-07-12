@@ -8,15 +8,27 @@
 #include <QGraphicsEllipseItem>
 #include <QGraphicsLineItem>
 #include <QGraphicsPathItem>
+#include <QGraphicsPixmapItem>
 #include <QGraphicsSimpleTextItem>
+#include <QImage>
+#include <QPainter>
 #include <QPainterPath>
+#include <QPixmap>
+#include <QPointF>
 #include <algorithm>
 #include <limits>
+#include <vector>
 
 // Por encima de este tamaño, dejamos de crear un QGraphicsItem por nodo/
 // segmento (miles de items individuales hacen que Qt se arrastre al
-// repintar/hacer zoom) y pasamos a dibujar en lote con QPainterPath.
+// repintar/hacer zoom) y pasamos a dibujar en lote.
 static const int LOD_UMBRAL_NODOS = 500;
+
+// Lado máximo (px) del raster donde se precalculan los puntos de cliente en
+// modo LOD. Capado para no pedir, por ejemplo, un QImage de 10000x10000
+// (400 MB a 32bpp) cuando la instancia cubre un área grande: el raster se
+// escala de vuelta al tamaño real de la escena vía QGraphicsItem::setScale.
+static const int LOD_RASTER_MAX = 2000;
 
 RouteView::RouteView(QWidget* parent)
     : QGraphicsView(parent)
@@ -156,16 +168,40 @@ void RouteView::dibujar(const Solucion& sol) {
             }
         }
     } else {
-        // Con miles de clientes las etiquetas de texto son ilegibles de
-        // todas formas: se omiten (ni addSimpleText ni addEllipse por
-        // nodo) y se agregan todos los círculos como UN solo QPainterPath.
-        QPainterPath puntos;
+        // Con miles/millones de clientes, un QPainterPath con una elipse
+        // vectorial por nodo satura el teselador de Qt (cada elipse es una
+        // curva Bézier que hay que rasterizar en cada repintado/zoom).
+        // En su lugar: rasterizamos los puntos UNA sola vez con
+        // QPainter::drawPoints sobre un QImage cacheado (mucho más barato:
+        // un simple lote de píxeles) y lo insertamos como un único
+        // QGraphicsPixmapItem — de O(n) curvas vectoriales a 1 solo bitmap.
+        QRectF area = m_escena->sceneRect();
+        double ladoMayor = std::max(area.width(), area.height());
+        double escala = (ladoMayor > LOD_RASTER_MAX) ? LOD_RASTER_MAX / ladoMayor : 1.0;
+
+        int anchoRaster = std::max(1, static_cast<int>(area.width()  * escala));
+        int altoRaster   = std::max(1, static_cast<int>(area.height() * escala));
+
+        QImage raster(anchoRaster, altoRaster, QImage::Format_ARGB32_Premultiplied);
+        raster.fill(Qt::transparent);
+
+        std::vector<QPointF> puntos;
+        puntos.reserve(static_cast<size_t>(std::max(0, m_instancia.cantidadNodos() - 1)));
         for (int i = 1; i < m_instancia.cantidadNodos(); ++i) {
             const Cliente& c = m_instancia.nodo(i);
-            const double r = 6.0;
-            puntos.addEllipse(c.x - r, c.y - r, 2*r, 2*r);
+            puntos.emplace_back((c.x - area.left()) * escala, (c.y - area.top()) * escala);
         }
-        m_escena->addPath(puntos, QPen(QColor(60, 60, 60)), QBrush(QColor(120, 180, 240)));
+
+        {
+            QPainter pintor(&raster);
+            pintor.setRenderHint(QPainter::Antialiasing, false);
+            pintor.setPen(QPen(QColor(60, 60, 60), 2));
+            pintor.drawPoints(puntos.data(), static_cast<int>(puntos.size()));
+        }
+
+        auto* item = m_escena->addPixmap(QPixmap::fromImage(raster));
+        item->setPos(area.left(), area.top());
+        item->setScale(1.0 / escala);
 
         // El depósito sí se marca individualmente (un solo item extra).
         const Cliente& dep = m_instancia.nodo(0);

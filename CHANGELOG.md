@@ -1,5 +1,82 @@
 # Changelog
 
+## [Sin publicar] — 2026-07-11 (iteración 3)
+
+### Cambios
+
+- **SA: presupuesto de iteraciones escalado por n, no solo por T0/alpha/Tmin.**
+  El enfriamiento por defecto llegaba a `Tmin` en ~2300 pasos sin importar
+  si la instancia tenía 10 o 10^6 clientes — con `n` grande, la inmensa
+  mayoría de la solución nunca se tocaba. Ahora `maxIteracionesReales` se
+  deriva de `n` (piso 2000, techo 2,000,000), y el `alpha` efectivo se
+  recalcula (`pow(Tmin/T0, 1/maxIteracionesReales)`) para que el
+  enfriamiento realmente tarde ese presupuesto en agotarse — cambiar solo
+  el techo de iteraciones sin esto no alcanzaba, porque la condición
+  `T > Tmin` seguía cortando el bucle en los mismos ~2300 pasos de
+  siempre (se verificó empíricamente: sin este segundo ajuste la mejora de
+  SA sobre Greedy en una instancia de 3000 clientes era de 0.001%; con el
+  alpha derivado, 0.82%).
+- **SA: iteraciones fallidas no enfrían.** Si `aplicar2Opt` no genera
+  movimiento (`idxRuta == -1`, ruta elegida sin tamaño para un 2-opt), la
+  iteración hace `continue` sin bajar la temperatura — antes se gastaba
+  "combustible" de enfriamiento en intentos que no movieron nada. Se
+  agregó una válvula de seguridad (tope de intentos totales) para el caso
+  patológico de que ninguna ruta sea nunca elegible.
+- **Corrección de floating-point drift.** Cada 10,000 movimientos
+  ACEPTADOS, `costoActual` se recalcula desde cero con `costoTotal()` en
+  vez de seguir acumulando `+= delta` indefinidamente — con millones de
+  sumas en punto flotante el error acumulado deja de ser despreciable.
+- **`Instancia::nodo()` / `Solucion::ruta()` con `assert()` en vez de
+  `throw`.** Son los getters de mayor tráfico del proyecto (SA los llama
+  en cada iteración). `assert()` se compila a nada en Release (`NDEBUG`),
+  eliminando el branching de validación del hot-loop; en builds Debug
+  sigue atrapando índices inválidos igual que antes. `depot()` (poco
+  usado, no hot-path) se dejó con `throw`.
+- **`GreedyNN`: `reserve()` en cada ruta.** Cota superior real (`min(n,
+  Q+2)`, porque cada cliente pide al menos 1 unidad) para evitar
+  realocaciones por doblado de capacidad mientras la ruta crece. El
+  pre-filtro de "cliente no cabe en la capacidad restante" ya existía
+  desde la iteración anterior (se documentó mejor con un comentario).
+- **`LectorInstancia::trim()` con `std::string_view`.** Ya no copia a
+  `std::string` en cada llamada (se invoca varias veces por línea). Los
+  dos puntos donde sí hace falta un `std::string` real —`std::stoi`
+  (DIMENSION/CAPACITY, una vez por archivo) e `istringstream` (una vez
+  por línea de datos, porque no tiene constructor desde `string_view` en
+  C++17)— quedan con conversión explícita y comentada.
+- **Tabla de clientes: `QTableWidget` → `QTableView` + `ClientesTableModel`.**
+  El modelo nuevo (`QAbstractTableModel`, en `MainWindow.h`) lee directo de
+  `const Instancia*` y genera cada celda on-demand en `data()` — O(1) por
+  celda pedida, en vez de instanciar un `QTableWidgetItem` por cada una de
+  las `4 × n` celdas de golpe (con `n` = 10^6, eso son millones de
+  QObjects vivos solo para la tabla).
+- **`RouteView`: puntos LOD sin `QPainterPath` de miles de elipses.**
+  Con más de 500 nodos, los marcadores de cliente ya no se acumulan como
+  curvas Bézier en un `QPainterPath` (caro de tesselar); se rasterizan una
+  sola vez con `QPainter::drawPoints` sobre un `QImage` cacheado (acotado
+  a 2000px de lado para no pedir un bitmap gigante) y se insertan como un
+  único `QGraphicsPixmapItem`, escalado de vuelta al tamaño real de la
+  escena.
+- **`MainWindow::onCalculoTerminado()` con semántica de movimiento.** La
+  solución (ganadora, en el caso de "Comparar") se traslada a
+  `m_solucion` con `std::move()` en vez de copiarse. Además, si todos los
+  resultados de una corrida fallan, el mapa y `m_solucion` se limpian en
+  vez de dejar pintada la solución de la corrida anterior.
+- **Directorio de datos por defecto vía CMake.**
+  `target_compile_definitions(VRP_Solver PRIVATE DEFAULT_DATA_DIR="...")`
+  inyecta la ruta de `data/`; `onCargarInstancia()` abre el diálogo ahí en
+  vez de a ciegas.
+
+### Rechazado en esta sesión
+
+- **Automatizar `windeployqt` desde CMake.** Se mantiene como paso externo
+  de CI/CD — `DEFAULT_DATA_DIR` es una constante de compilación, no
+  despliegue, así que no contradice esta decisión previa.
+- **Parámetros vía variables de entorno globales.** Se prefirió pasar
+  `DEFAULT_DATA_DIR` como definición de compilación directa (acoplamiento
+  funcional simple) en vez de leer variables de entorno en runtime — es
+  un proyecto académico/científico, no hace falta la indirección extra de
+  configuración externa ni una factoría para eso.
+
 ## [Sin publicar] — 2026-07-11 (iteración 2)
 
 ### Cambios

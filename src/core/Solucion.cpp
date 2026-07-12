@@ -2,7 +2,7 @@
 //  Solucion.cpp
 // ============================================================================
 #include "Solucion.h"
-#include <stdexcept>
+#include <cassert>
 
 Solucion::Solucion() {}
 
@@ -15,16 +15,14 @@ int Solucion::cantidadRutas() const {
 }
 
 const Ruta& Solucion::ruta(int i) const {
-    if (i < 0 || i >= static_cast<int>(m_rutas.size())) {
-        throw std::out_of_range("Indice de ruta fuera de rango.");
-    }
+    // Alto tráfico: SA llama a ruta(idxRuta) en cada iteración. assert()
+    // en vez de throw — sin costo en Release, sigue protegiendo en Debug.
+    assert(i >= 0 && i < static_cast<int>(m_rutas.size()) && "Indice de ruta fuera de rango.");
     return m_rutas[i];
 }
 
 Ruta& Solucion::ruta(int i) {
-    if (i < 0 || i >= static_cast<int>(m_rutas.size())) {
-        throw std::out_of_range("Indice de ruta fuera de rango.");
-    }
+    assert(i >= 0 && i < static_cast<int>(m_rutas.size()) && "Indice de ruta fuera de rango.");
     return m_rutas[i];
 }
 

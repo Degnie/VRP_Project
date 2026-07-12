@@ -21,7 +21,7 @@
 #include <QPushButton>
 #include <QSplitter>
 #include <QStatusBar>
-#include <QTableWidget>
+#include <QTableView>
 #include <QTextEdit>
 #include <QToolBar>
 #include <QVBoxLayout>
@@ -36,6 +36,7 @@ MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
     , m_panelIzq(nullptr)
     , m_tablaClientes(nullptr)
+    , m_modeloClientes(nullptr)
     , m_mapa(nullptr)
     , m_panelResultados(nullptr)
     , m_editX(nullptr)
@@ -111,10 +112,13 @@ void MainWindow::construirInterfaz() {
     layNuevo->addLayout(layCampos);
     layNuevo->addWidget(btnAgregar);
 
-    // Tabla de clientes.
-    m_tablaClientes = new QTableWidget(m_panelIzq);
-    m_tablaClientes->setColumnCount(4);
-    m_tablaClientes->setHorizontalHeaderLabels(QStringList() << "ID" << "X" << "Y" << "Demanda");
+    // Tabla de clientes: QTableView + modelo propio (ClientesTableModel),
+    // en vez de QTableWidget con un QTableWidgetItem por celda — con
+    // instancias de millones de clientes, la vista solo pide data() para
+    // las celdas realmente visibles.
+    m_modeloClientes = new ClientesTableModel(this);
+    m_tablaClientes  = new QTableView(m_panelIzq);
+    m_tablaClientes->setModel(m_modeloClientes);
     m_tablaClientes->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     m_tablaClientes->setEditTriggers(QAbstractItemView::NoEditTriggers);
 
@@ -181,8 +185,10 @@ void MainWindow::construirInterfaz() {
 //  Slots
 // -----------------------------------------------------------------------------
 void MainWindow::onCargarInstancia() {
+    // DEFAULT_DATA_DIR viene de CMake (target_compile_definitions): abre el
+    // diálogo directo en la carpeta data/ del proyecto en vez de a ciegas.
     QString rutaQt = QFileDialog::getOpenFileName(
-        this, "Cargar instancia VRP", QString(),
+        this, "Cargar instancia VRP", QString(DEFAULT_DATA_DIR),
         "Archivos VRP (*.vrp *.txt);;Todos (*)");
     if (rutaQt.isEmpty()) return;
 
@@ -296,10 +302,11 @@ void MainWindow::onCompararAlgoritmos() {
 // -----------------------------------------------------------------------------
 
 // Busca un resultado por su etiqueta ("GREEDY"/"SA") en vez de asumir un
-// índice fijo — más robusto si el orden de 'resultados' cambia.
-static const ResultadoAlgoritmo* buscarPorEtiqueta(
-    const std::vector<ResultadoAlgoritmo>& resultados, const QString& etiqueta) {
-    for (const ResultadoAlgoritmo& r : resultados) {
+// índice fijo — más robusto si el orden de 'resultados' cambia. No-const
+// para poder std::move() la solución ganadora fuera de 'resultados'.
+static ResultadoAlgoritmo* buscarPorEtiqueta(
+    std::vector<ResultadoAlgoritmo>& resultados, const QString& etiqueta) {
+    for (ResultadoAlgoritmo& r : resultados) {
         if (r.etiqueta == etiqueta) return &r;
     }
     return nullptr;
@@ -345,46 +352,64 @@ void MainWindow::onCalculoTerminado() {
     }
     resultados.erase(std::remove_if(resultados.begin(), resultados.end(),
         [](const ResultadoAlgoritmo& r) { return !r.error.isEmpty(); }), resultados.end());
-    if (resultados.empty()) return;
+
+    if (resultados.empty()) {
+        // Todo lo que llegó falló: no dejamos pintada en el mapa la
+        // solución "fantasma" de un cómputo anterior — se limpia la vista.
+        m_solucion.limpiar();
+        m_mapa->limpiar();
+        m_lblResumen->setText("Sin solución (el último cálculo falló).");
+        return;
+    }
 
     if (resultados.size() == 1) {
-        const ResultadoAlgoritmo& r = resultados[0];
-        double cost = r.solucion.costoTotal(m_instancia);
-        m_solucion = r.solucion;
-        refrescarMapa(r.solucion);
+        ResultadoAlgoritmo& r = resultados[0];
+        // Calculamos todo lo que necesitamos ANTES de mover r.solucion:
+        // después del move, r.solucion queda en un estado válido pero
+        // no-especificado (probablemente vacío).
+        double cost   = r.solucion.costoTotal(m_instancia);
+        bool   valida = r.solucion.esValida(m_instancia);
+        int    rutas  = r.solucion.cantidadRutas();
+
+        // Traslada el vector de rutas a m_solucion sin copiarlo (r.solucion
+        // vive en un std::vector local a esta función, no hace falta
+        // conservarlo después de esto).
+        m_solucion = std::move(r.solucion);
+        refrescarMapa(m_solucion);
 
         QString linea = QString("[%1] %2  |  costo = %3  |  tiempo = %4 ms  |  rutas = %5  |  válida = %6")
             .arg(r.etiqueta, r.nombreAlgoritmo)
             .arg(cost, 0, 'f', 2)
             .arg(r.ms,  0, 'f', 2)
-            .arg(r.solucion.cantidadRutas())
-            .arg(r.solucion.esValida(m_instancia) ? "SI" : "NO");
+            .arg(rutas)
+            .arg(valida ? "SI" : "NO");
         log(linea);
         m_lblResumen->setText(linea);
         return;
     }
 
     // Comparación (Greedy vs SA), buscadas por etiqueta.
-    const ResultadoAlgoritmo* pg  = buscarPorEtiqueta(resultados, "GREEDY");
-    const ResultadoAlgoritmo* psa = buscarPorEtiqueta(resultados, "SA");
+    ResultadoAlgoritmo* pg  = buscarPorEtiqueta(resultados, "GREEDY");
+    ResultadoAlgoritmo* psa = buscarPorEtiqueta(resultados, "SA");
     if (!pg || !psa) return;   // no debería pasar, pero evita un [] fuera de rango
-    const ResultadoAlgoritmo& rg  = *pg;
-    const ResultadoAlgoritmo& rsa = *psa;
-    double costG  = rg.solucion.costoTotal(m_instancia);
-    double costSA = rsa.solucion.costoTotal(m_instancia);
+    double costG  = pg->solucion.costoTotal(m_instancia);
+    double costSA = psa->solucion.costoTotal(m_instancia);
+    bool   saGana = costSA < costG;
+    QString cual  = saGana ? "SA" : "Greedy";
+    int rutasG    = pg->solucion.cantidadRutas();
+    int rutasSA   = psa->solucion.cantidadRutas();
 
-    Solucion mejor = (costSA < costG) ? rsa.solucion : rg.solucion;
-    QString  cual  = (costSA < costG) ? "SA" : "Greedy";
-    m_solucion = mejor;
-    refrescarMapa(mejor);
+    // Solo movemos la ganadora (la otra se descarta junto con 'resultados').
+    m_solucion = saGana ? std::move(psa->solucion) : std::move(pg->solucion);
+    refrescarMapa(m_solucion);
 
     double mejora = (costG - costSA) / costG * 100.0;
 
     log("======= COMPARACION =======");
     log(QString("Greedy:  costo = %1  |  tiempo = %2 ms  |  rutas = %3")
-        .arg(costG, 0, 'f', 2).arg(rg.ms, 0, 'f', 2).arg(rg.solucion.cantidadRutas()));
+        .arg(costG, 0, 'f', 2).arg(pg->ms, 0, 'f', 2).arg(rutasG));
     log(QString("SA:      costo = %1  |  tiempo = %2 ms  |  rutas = %3")
-        .arg(costSA, 0, 'f', 2).arg(rsa.ms, 0, 'f', 2).arg(rsa.solucion.cantidadRutas()));
+        .arg(costSA, 0, 'f', 2).arg(psa->ms, 0, 'f', 2).arg(rutasSA));
     log(QString("Mejora del SA sobre Greedy: %1 %%").arg(mejora, 0, 'f', 2));
     log(QString("Mostrando en el mapa la mejor solución (%1).").arg(cual));
 
@@ -394,15 +419,10 @@ void MainWindow::onCalculoTerminado() {
 }
 
 void MainWindow::refrescarTabla() {
-    m_tablaClientes->setRowCount(m_instancia.cantidadNodos());
-    for (int i = 0; i < m_instancia.cantidadNodos(); ++i) {
-        const Cliente& c = m_instancia.nodo(i);
-        m_tablaClientes->setItem(i, 0, new QTableWidgetItem(QString::number(c.id)));
-        m_tablaClientes->setItem(i, 1, new QTableWidgetItem(QString::number(c.x, 'f', 2)));
-        m_tablaClientes->setItem(i, 2, new QTableWidgetItem(QString::number(c.y, 'f', 2)));
-        m_tablaClientes->setItem(i, 3, new QTableWidgetItem(
-            i == 0 ? QString("Depósito") : QString::number(c.demanda)));
-    }
+    // El modelo lee directo de m_instancia; esto solo dispara el reset
+    // (begin/endResetModel) para que la vista vuelva a pedir las celdas
+    // visibles. Nada de reconstruir items fila por fila.
+    m_modeloClientes->setInstancia(&m_instancia);
 }
 
 void MainWindow::refrescarMapa(const Solucion& sol) {

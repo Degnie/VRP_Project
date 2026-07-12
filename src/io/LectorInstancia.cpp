@@ -6,12 +6,16 @@
 #include <exception>
 #include <fstream>
 #include <sstream>
+#include <string_view>
 #include <vector>
 
-// Elimina espacios en blanco al inicio y al final de una cadena.
-static std::string trim(const std::string& s) {
+// Elimina espacios en blanco al inicio y al final. Devuelve una vista sobre
+// 's' (sin copiar): en un archivo de millones de líneas, trim() se llama
+// varias veces por línea, y cada std::string devuelto antes era una
+// asignación de heap que no hacía falta.
+static std::string_view trim(std::string_view s) {
     size_t a = s.find_first_not_of(" \t\r\n");
-    if (a == std::string::npos) return "";
+    if (a == std::string_view::npos) return {};
     size_t b = s.find_last_not_of(" \t\r\n");
     return s.substr(a, b - a + 1);
 }
@@ -48,22 +52,25 @@ bool LectorInstancia::cargar(const std::string& rutaArchivo,
     try {
         while (std::getline(f, linea)) {
             ++numLinea;
-            std::string t = trim(linea);
+            std::string_view t = trim(linea);
             if (t.empty()) continue;
 
             // Palabras clave: activan una sección o guardan un valor.
             if (t.rfind("NAME", 0) == 0) {
                 size_t p = t.find(':');
-                if (p != std::string::npos) nombre = trim(t.substr(p + 1));
+                if (p != std::string_view::npos) nombre = trim(t.substr(p + 1));
                 continue;
             }
             if (t.rfind("DIMENSION", 0) == 0) {
                 size_t p = t.find(':');
-                if (p == std::string::npos) {
+                if (p == std::string_view::npos) {
                     error = "DIMENSION mal formada en la linea " + std::to_string(numLinea) + ".";
                     return false;
                 }
-                dimension = std::stoi(trim(t.substr(p + 1)));
+                // std::stoi no tiene sobrecarga para string_view: esta sí es
+                // una conversión explícita a std::string, pero ocurre una
+                // sola vez por archivo (no en el hot-loop de líneas de datos).
+                dimension = std::stoi(std::string(trim(t.substr(p + 1))));
                 if (dimension <= 0 || dimension > DIMENSION_MAXIMA) {
                     error = "DIMENSION fuera de rango en la linea " + std::to_string(numLinea) + ".";
                     return false;
@@ -74,11 +81,11 @@ bool LectorInstancia::cargar(const std::string& rutaArchivo,
             }
             if (t.rfind("CAPACITY", 0) == 0) {
                 size_t p = t.find(':');
-                if (p == std::string::npos) {
+                if (p == std::string_view::npos) {
                     error = "CAPACITY mal formada en la linea " + std::to_string(numLinea) + ".";
                     return false;
                 }
-                capacidad = std::stoi(trim(t.substr(p + 1)));
+                capacidad = std::stoi(std::string(trim(t.substr(p + 1))));
                 continue;
             }
             if (t == "NODE_COORD_SECTION") { seccion = "COORD";  continue; }
@@ -86,8 +93,9 @@ bool LectorInstancia::cargar(const std::string& rutaArchivo,
             if (t == "EOF")                 break;
 
             // Datos dentro de una sección: se escriben directo sobre 'nodos',
-            // sin arreglos intermedios.
-            std::istringstream ss(t);
+            // sin arreglos intermedios. istringstream sí necesita poseer un
+            // std::string (no tiene constructor desde string_view en C++17).
+            std::istringstream ss{std::string(t)};
             if (seccion == "COORD") {
                 int    id;
                 double x, y;

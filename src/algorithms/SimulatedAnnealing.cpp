@@ -101,23 +101,61 @@ Solucion SimulatedAnnealing::resolver(const Instancia& inst) {
     Solucion mejor  = actual;
 
     // Costo se mantiene incremental (O(1) por movimiento), no se recalcula
-    // recorriendo toda la solución en cada iteración.
+    // recorriendo toda la solución en cada iteración (salvo el recálculo
+    // periódico de más abajo, para corregir drift de punto flotante).
     double costoActual = actual.costoTotal(inst);
-    double costoMejor   = costoActual;
+    double costoMejor  = costoActual;
+
+    // Presupuesto de iteraciones REALES (2-opt con ruta elegible) escalado
+    // con el tamaño de la instancia: con T0/alpha/Tmin fijos, el enfriamiento
+    // por defecto se agota en ~2300 pasos sin importar si n es 10 o 10^6,
+    // dejando casi toda una instancia grande sin tocar. Lo acotamos entre un
+    // piso (instancias chicas siguen explorando igual que antes) y un techo
+    // (para no correr indefinidamente con n = 10^6).
+    const long long n = std::max(1, inst.cantidadClientes());
+    const long long maxIteracionesReales =
+        std::min<long long>(std::max<long long>(2000, n * 20), 2'000'000);
+
+    // Válvula de seguridad: si TODAS las rutas son demasiado cortas para un
+    // 2-opt (idxRuta == -1 siempre), esos intentos no cuentan como
+    // "reales" y no enfrían nada — sin este tope el bucle no terminaría.
+    const long long maxIntentosTotales = maxIteracionesReales * 50;
+
+    // Cada K movimientos ACEPTADOS, se recalcula costoActual desde cero:
+    // sumar deltas en punto flotante millones de veces acumula error.
+    const long long RECALCULO_CADA = 10000;
+
+    // m_alpha fijo es justamente el "decaimiento ciego" del problema: con
+    // alpha=0.995 el enfriamiento llega a Tmin en ~2300 pasos SIEMPRE, sin
+    // importar que maxIteracionesReales ahora sea 2 millones para n grande
+    // — la condición T > m_Tmin cortaría el bucle mucho antes de agotar el
+    // presupuesto. Derivamos el alpha que hace que T tarde exactamente
+    // maxIteracionesReales pasos en llegar a Tmin, y usamos el más lento de
+    // los dos (así un alpha explícitamente más conservador vía setAlpha()
+    // se sigue respetando).
+    const double alphaDerivado = std::pow(m_Tmin / m_T0, 1.0 / static_cast<double>(maxIteracionesReales));
+    const double alphaEfectivo = std::max(m_alpha, alphaDerivado);
 
     double T = m_T0;
+    long long iteracionesReales = 0;
+    long long aceptados         = 0;
+    long long intentosTotales   = 0;
 
     // 2) Bucle principal de enfriamiento.
-    while (T > m_Tmin) {
+    while (T > m_Tmin
+           && iteracionesReales < maxIteracionesReales
+           && intentosTotales < maxIntentosTotales) {
+        ++intentosTotales;
 
         int idxRuta = -1, i = -1, j = -1;
         double delta = aplicar2Opt(inst, actual, idxRuta, i, j);
 
         if (idxRuta == -1) {
-            // No había ninguna ruta elegible para 2-opt; nada que hacer.
-            T = T * m_alpha;
+            // Ruta elegida sin tamaño para 2-opt: no se generó ningún
+            // movimiento, así que no gastamos temperatura en esta iteración.
             continue;
         }
+        ++iteracionesReales;
 
         // exp(-delta/T): con delta/T muy grande, IEEE 754 ya devuelve 0.0 sin
         // levantar excepciones, pero acotamos el exponente para no depender
@@ -132,7 +170,13 @@ Solucion SimulatedAnnealing::resolver(const Instancia& inst) {
         }
 
         if (aceptar) {
+            ++aceptados;
             costoActual += delta;
+
+            if (aceptados % RECALCULO_CADA == 0) {
+                costoActual = actual.costoTotal(inst);
+            }
+
             if (costoActual < costoMejor) {
                 mejor      = actual;
                 costoMejor = costoActual;
@@ -143,8 +187,8 @@ Solucion SimulatedAnnealing::resolver(const Instancia& inst) {
             std::reverse(r.begin() + i, r.begin() + j + 1);
         }
 
-        // Enfriamiento geométrico.
-        T = T * m_alpha;
+        // Enfriamiento geométrico (solo en iteraciones que sí intentaron un 2-opt real).
+        T = T * alphaEfectivo;
     }
 
     return mejor;

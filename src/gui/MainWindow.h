@@ -18,9 +18,11 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
+#include <QAbstractTableModel>
 #include <QMainWindow>
 #include <QFutureWatcher>
 #include <QString>
+#include <QVariant>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -29,7 +31,7 @@
 
 // Declaraciones adelantadas (no hace falta incluir cada header aquí).
 class QWidget;
-class QTableWidget;
+class QTableView;
 class QTextEdit;
 class QLabel;
 class QLineEdit;
@@ -44,6 +46,53 @@ struct ResultadoAlgoritmo {
     Solucion solucion;
     double   ms = 0.0;
     QString  error;
+};
+
+// Modelo Qt para la tabla de clientes: lee directo de un const Instancia*
+// y genera cada celda on-demand en data() — O(1) por celda, sin instanciar
+// un QTableWidgetItem por fila/columna (con 10^6 clientes eso son millones
+// de objetos QObject-like vivos en memoria a la vez, solo por la tabla).
+class ClientesTableModel : public QAbstractTableModel {
+    Q_OBJECT
+public:
+    explicit ClientesTableModel(QObject* parent = nullptr) : QAbstractTableModel(parent) {}
+
+    // No es dueño de la instancia: apunta a m_instancia de MainWindow, que
+    // vive mientras viva la ventana. Llamar de nuevo cada vez que cambian
+    // los datos (carga, agregar cliente, limpiar) para refrescar la vista.
+    void setInstancia(const Instancia* inst) {
+        beginResetModel();
+        m_instancia = inst;
+        endResetModel();
+    }
+
+    int rowCount(const QModelIndex& = QModelIndex()) const override {
+        return m_instancia ? m_instancia->cantidadNodos() : 0;
+    }
+
+    int columnCount(const QModelIndex& = QModelIndex()) const override { return 4; }
+
+    QVariant data(const QModelIndex& index, int role) const override {
+        if (!m_instancia || role != Qt::DisplayRole || !index.isValid()) return QVariant();
+        const Cliente& c = m_instancia->nodo(index.row());
+        switch (index.column()) {
+            case 0: return c.id;
+            case 1: return QString::number(c.x, 'f', 2);
+            case 2: return QString::number(c.y, 'f', 2);
+            case 3: return index.row() == 0 ? QString("Depósito") : QString::number(c.demanda);
+            default: return QVariant();
+        }
+    }
+
+    QVariant headerData(int section, Qt::Orientation orientation, int role) const override {
+        if (role != Qt::DisplayRole || orientation != Qt::Horizontal) return QVariant();
+        static const char* nombres[] = {"ID", "X", "Y", "Demanda"};
+        if (section < 0 || section >= 4) return QVariant();
+        return QString(nombres[section]);
+    }
+
+private:
+    const Instancia* m_instancia = nullptr;
 };
 
 class MainWindow : public QMainWindow {
@@ -92,10 +141,11 @@ private:
     bool m_ejecutando = false;
 
     // Widgets principales.
-    QWidget*      m_panelIzq;   // se deshabilita mientras corre un cálculo
-    QTableWidget* m_tablaClientes;
-    RouteView*    m_mapa;
-    QTextEdit*    m_panelResultados;
+    QWidget*             m_panelIzq;   // se deshabilita mientras corre un cálculo
+    QTableView*          m_tablaClientes;
+    ClientesTableModel*  m_modeloClientes;
+    RouteView*           m_mapa;
+    QTextEdit*           m_panelResultados;
 
     // Campos para agregar cliente manualmente.
     QLineEdit* m_editX;
