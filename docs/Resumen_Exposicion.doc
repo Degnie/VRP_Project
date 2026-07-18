@@ -1,0 +1,125 @@
+<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta charset="utf-8">
+<title>Resumen para exposición — VRP Solver</title>
+<style>
+  body { font-family: Calibri, Arial, sans-serif; font-size: 12pt; line-height: 1.4; }
+  h1 { font-size: 20pt; color: #1F4E5F; margin-bottom: 4pt; }
+  h2 { font-size: 15pt; color: #00875A; margin-top: 22pt; margin-bottom: 4pt; border-bottom: 1pt solid #CCCCCC; padding-bottom: 3pt; }
+  .subtitle { font-size: 12pt; color: #555555; margin-bottom: 16pt; }
+  table { border-collapse: collapse; width: 100%; margin: 8pt 0 14pt 0; }
+  td, th { border: 1pt solid #AAAAAA; padding: 6pt 8pt; text-align: left; vertical-align: top; }
+  th { background-color: #EFEFEF; }
+  .ejemplo { background-color: #F5F7F5; border-left: 3pt solid #00875A; padding: 8pt 10pt; margin: 6pt 0 12pt 0; }
+  ul { margin-top: 4pt; }
+</style>
+</head>
+<body>
+
+<h1>VRP Solver — Optimización de Rutas de Vehículos</h1>
+<p class="subtitle">Resumen para exposición · Análisis y Diseño de Algoritmos · EP Ciencia de la Computación, UNMSM</p>
+
+<h2>1. ¿Qué problema resolvemos?</h2>
+<p>Una empresa tiene un almacén (depósito) y varios clientes que necesitan que les lleven productos.
+Hay un número limitado de camiones y cada camión solo puede cargar hasta cierto peso (capacidad).
+El objetivo es armar las rutas de entrega gastando la menor distancia total posible, sin que ningún
+camión lleve más carga de la que puede.</p>
+
+<div class="ejemplo">
+<b>Ejemplo:</b> Un depósito y 5 clientes que piden 3, 4, 2, 5 y 1 unidades. Si cada camión aguanta
+10 unidades, no podemos meter a todos en un solo camión (3+4+2+5+1 = 15 &gt; 10), así que el sistema
+tiene que decidir cómo repartirlos en 2 o más rutas gastando la menor distancia posible.</p>
+</div>
+
+<h2>2. ¿Cómo lo resolvemos? (dos algoritmos)</h2>
+
+<p><b>a) Greedy — "el vecino más cercano"</b><br>
+El camión sale del depósito y siempre va al cliente no visitado más cercano que todavía le entre
+en la capacidad. Es rápido de calcular, pero como decide "a lo que venga" en cada paso, no siempre
+encuentra la mejor ruta posible (puede dejarse una ciudad lejos "arrinconada").</p>
+
+<p><b>b) Simulated Annealing (Recocido Simulado) — "mejora la ruta a base de prueba y error"</b><br>
+Partimos de una ruta ya armada y la vamos retocando: probamos intercambiar tramos de la ruta
+(técnica <i>2-opt</i>, como "desenredar" un cable cruzado) y nos quedamos con la mejora. Lo interesante
+es que, a veces, aceptamos a propósito un cambio que empeora un poco la ruta — igual que cuando
+uno se "aleja" de un mal camino para poder encontrar uno mejor más adelante — y esa tolerancia a
+empeorar baja con el tiempo (como enfriar un metal poco a poco), hasta que el algoritmo se estabiliza
+en una muy buena solución.</p>
+
+<div class="ejemplo">
+<b>Analogía:</b> Greedy es como armar un rompecabezas poniendo siempre la primera pieza que encaje.
+Simulated Annealing es como armarlo, dar un paso atrás, notar que dos piezas quedan mejor
+intercambiadas, y seguir puliendo hasta que ya no hay forma de mejorarlo mucho más.</p>
+</div>
+
+<h2>3. Mejoras lógicas más relevantes (bajar la complejidad)</h2>
+<p>Durante el desarrollo no solo hicimos que el programa funcione, sino que lo hicimos <b>escalar</b>
+para instancias con millones de clientes. Estas son las mejoras clave, explicadas en simple:</p>
+
+<table>
+<tr><th>Problema original</th><th>Qué hicimos</th><th>Por qué importa</th></tr>
+<tr>
+  <td>En Simulated Annealing, cada movimiento recalculaba <b>el costo total de toda la ruta</b>.</td>
+  <td>Ahora solo recalculamos el cambio (<i>delta</i>): las 2 conexiones que se rompen y las 2 que se
+  crean.</td>
+  <td>Es como corregir una palabra mal escrita revisando solo esa palabra, en vez de releer todo el
+  libro. Pasamos de recalcular todo (O(n)) a recalcular solo el cambio (O(1)) en cada paso.</td>
+</tr>
+<tr>
+  <td>Buscar duplicados de clientes usaba una estructura de árbol (<code>std::set</code>), más lenta
+  y con más memoria dispersa.</td>
+  <td>La cambiamos por un simple arreglo de sí/no indexado por el número de cliente.</td>
+  <td>Es como usar una lista de casilleros numerados en vez de un directorio telefónico para saber
+  "¿ya visité a este cliente?". Consultar un casillero es instantáneo.</td>
+</tr>
+<tr>
+  <td>La tabla de clientes en pantalla creaba <b>un objeto por cada celda</b> (con un millón de
+  clientes, eso son millones de objetos vivos solo para mostrar una tabla).</td>
+  <td>Ahora la tabla genera cada celda "al vuelo", solo cuando se necesita mostrar en pantalla.</td>
+  <td>Es como no imprimir un libro entero de una vez, sino mostrar solo la página que el lector tiene
+  abierta.</td>
+</tr>
+<tr>
+  <td>El mapa dibujaba <b>una figura por cada cliente y cada tramo de ruta</b> — con miles de clientes,
+  la pantalla se volvía lenta.</td>
+  <td>Agrupamos todos los tramos de una ruta en un solo dibujo, y todos los puntos de clientes en una
+  sola imagen.</td>
+  <td>Es como pintar una pared con un rodillo grande en vez de con miles de pinceladas de un pelo.</td>
+</tr>
+<tr>
+  <td>Simulated Annealing tenía un número fijo de "intentos de mejora", sin importar si la instancia
+  tenía 10 o un millón de clientes.</td>
+  <td>Ahora la cantidad de intentos se ajusta según el tamaño de la instancia.</td>
+  <td>Con una instancia grande y pocos intentos, casi ni se tocaba la solución. Al ajustar el
+  presupuesto, la mejora real sobre Greedy pasó de un 0.001% a un 0.82% en una prueba con 3000
+  clientes.</td>
+</tr>
+<tr>
+  <td>Los cálculos de ruteo se hacían en el mismo hilo que la interfaz gráfica: el programa se
+  "congelaba" mientras calculaba.</td>
+  <td>El cálculo ahora corre en segundo plano (otro hilo), y la interfaz avisa con una barra de
+  progreso cuando termina.</td>
+  <td>Es como pedir comida delivery: uno sigue haciendo otras cosas mientras se prepara, en vez de
+  quedarse parado esperando en la cocina.</td>
+</tr>
+</table>
+
+<h2>4. Interfaz gráfica</h2>
+<p>Construimos la interfaz con Qt: permite ingresar clientes manualmente o cargar un archivo, dibuja
+las rutas en un mapa a color (un color por camión), muestra la distancia total recorrida y el tiempo
+que tardó cada algoritmo en milisegundos, y permite comparar Greedy contra Simulated Annealing en la
+misma corrida.</p>
+
+<h2>5. Conclusión para la exposición</h2>
+<ul>
+<li>Resolvemos un problema real de logística: repartir productos gastando la menor distancia sin
+pasarnos de la capacidad de los camiones.</li>
+<li>Comparamos dos formas de resolverlo: una rápida y directa (Greedy), y otra que pule el resultado
+probando y corrigiendo (Simulated Annealing).</li>
+<li>No nos quedamos solo con que "funcione": optimizamos el código para que siga siendo rápido incluso
+con instancias de hasta millones de clientes, bajando la complejidad de varias operaciones clave de
+"recalcular todo" a "recalcular solo lo que cambió".</li>
+</ul>
+
+</body>
+</html>

@@ -1,0 +1,24 @@
+# Estrategia de Pruebas (Testing Strategy)
+
+## 1. Cobertura Exigida
+* Hoy no hay un umbral de cobertura numérico exigido (no se mide con una herramienta de coverage). La regla real, informal, es: **el núcleo del solver (`core/`, `algorithms/`, `io/`) debe poder ejecutarse y validarse de punta a punta sin Qt**, vía `tests/test_core.cpp` + CTest, antes de tocar la GUI.
+* Regla de negocio crítica cubierta: toda solución (`Solucion`) devuelta por Greedy o SA debe pasar `esValida()` (visita cada cliente exactamente una vez, respeta la capacidad `Q` de cada ruta) — `test_core` lo imprime (`valida=SI/NO`) para ambos algoritmos en cada corrida.
+* Pendiente honesto: `test_core` no hace `assert`/`abort` sobre `esValida()` ni sobre el costo — solo lo imprime por stdout y el test pasa (exit 0) si no hubo excepción. Si Greedy o SA generan una solución inválida sin lanzar excepción, CTest lo reporta como éxito igual. No se debe asumir que "test_core en verde" implica "solución válida", hay que leer la salida.
+
+## 2. Estrategias por Capa
+* **Frontend (GUI Qt — `MainWindow`, `RouteView`):** sin tests automatizados. La verificación es manual (ejecutar la app, cargar una instancia, correr Greedy/SA/Comparar, revisar el log y el mapa). Las decisiones de robustez de esta capa están en el código, no en un test suite: excepciones del solver capturadas en `MainWindow` y mostradas como diálogo de error en vez de crashear; UI deshabilitada (`m_panelIzq`, barra de menú) mientras corre un cálculo en segundo plano para evitar mutar `m_instancia` a mitad de una corrida.
+* **Backend (`Instancia`, `LectorInstancia`, `GreedyNN`, `SimulatedAnnealing`, `Solucion`):** una prueba de humo (`tests/test_core.cpp`) sin dependencia de Qt, registrada en CTest (`enable_testing()` + `add_test(NAME test_core COMMAND test_core ${CMAKE_CURRENT_SOURCE_DIR}/data/ejemplo_10.vrp)` en `CMakeLists.txt`). Carga `data/ejemplo_10.vrp`, corre `GreedyNN` y `SimulatedAnnealing`, imprime costo/rutas/validez/tiempo de cada uno y el % de mejora de SA sobre Greedy. El test falla (exit 1) solo si `LectorInstancia::cargar` devuelve `false` o si el solver lanza una excepción (p.ej. demanda de cliente > `Q`); no falla por una solución inválida que no lance excepción (ver limitación en la sección 1).
+
+## 3. Inyección de Fallos (Fault Injection)
+Casos límite manejados defensivamente en el código de producción (no vía tests automatizados que los fuercen, sino por diseño):
+* **Archivos de instancia corruptos o malformados:** `LectorInstancia::cargar` envuelve el parseo (`std::stoi`, secciones del formato) en `try/catch` y valida `DIMENSION` contra un tope razonable antes de reservar memoria; devuelve `false` + mensaje de error en vez de propagar una excepción o reservar memoria arbitraria.
+* **Demanda de cliente mayor a la capacidad `Q`:** `GreedyNN::resolver` valida esto al inicio y lanza `std::invalid_argument` en vez de generar rutas vacías en un bucle infinito (bug de la iteración base, corregido en `1.0.0`, ver CHANGELOG).
+* **Excepciones del solver durante una corrida en segundo plano:** `MainWindow` las captura (vía `QFutureWatcher`) y las muestra como diálogo de error, en vez de dejar que crasheen la aplicación.
+* No hay actualmente inyección de fallos activa vía red/timeouts (el proyecto no tiene I/O de red) ni un harness que genere instancias `.vrp` corruptas automáticamente para fuzzing — es una oportunidad futura, no algo implementado hoy.
+
+## 4. Decisiones Históricas y Deuda Técnica
+* **Factory dinámico para los algoritmos** (registrar Greedy/SA por nombre en un mapa extensible en runtime): descartado repetidamente (iteraciones 1.0.0 y 1.1.0). Solo existen dos algoritmos, instanciados directamente donde se usan; se considera indirección sin beneficio hasta que exista un tercer algoritmo real.
+* **Automatizar `windeployqt` desde CMake:** descartado en 1.0.0, 1.1.0 y 1.2.0. Se mantiene como paso externo de CI/CD, fuera del alcance de las rondas de rendimiento/robustez.
+* **Parámetros vía variables de entorno globales:** descartado en 1.2.0. Se prefirió pasar `DEFAULT_DATA_DIR` como definición de compilación (`target_compile_definitions`) en vez de leer variables de entorno en runtime — proyecto académico/científico, sin necesidad de esa indirección.
+* **Cambiar la ruta de `add_test(NAME test_core ...)`:** evaluado y descartado en 1.2.0. Ya usa un path absoluto calculado en configure-time (`${CMAKE_CURRENT_SOURCE_DIR}/data/ejemplo_10.vrp`), correcto sin importar desde dónde se invoque `ctest`; cambiarlo habría sido indirección cosmética.
+* **Deuda técnica abierta:** `test_core` no hace aserciones duras sobre validez/costo de la solución (ver sección 1); tampoco existe ningún test automatizado para la GUI Qt (`MainWindow`, `RouteView`). Ambos son candidatos a una futura iteración si el proyecto lo requiere, pero no se han implementado.
