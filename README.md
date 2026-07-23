@@ -1,72 +1,218 @@
-# VRP Solver — Optimización del Problema de Ruteamiento de Vehículos
+# [PROYECTO LIBRE] VRP Solver — Optimización del Problema de Ruteamiento de Vehículos
 
-**Proyecto Final del curso: Análisis y Diseño de Algoritmos (2026.1)**
-**EP: Ciencia de la Computación — UNMSM**
+**Migración a Producción: Arquitectura Híbrida Python/C++ con Orquestación Inteligente**
 
-Desarrollamos una aplicación de escritorio en **C++17 con Qt** que resuelve el Problema de Ruteamiento de Vehículos (VRP) mediante la comparación experimental de heurísticas y metaheurísticas, cumpliendo con estrictos análisis de complejidad y escalabilidad.
-
-## 👥 Equipo de Trabajo
-* **Grupo de 3 integrantes**
-
-**Docente:** GUERRA GRADOS, Luis Angel
+**Equipo:** Grupo de 3 integrantes | **Docente:** GUERRA GRADOS, Luis Angel  
+**Institución:** EP: Ciencia de la Computación — UNMSM  
+**Fase:** Proyecto Final Académico (Completado) → **Escalado a Producción (Vigente)**
 
 ---
 
-## 📖 1. Descripción y Modelado del Problema
+## 📖 Descripción
 
-Abordamos el **Problema del Ruteamiento de Vehículos (VRP)**, que consiste en determinar un conjunto de rutas óptimas para una flota de vehículos que debe satisfacer la demanda de un conjunto de clientes desde un depósito central.
+Solver de **Problema de Ruteamiento de Vehículos (VRP)** que evolucionó de una solución académica en Qt/C++17 a una **arquitectura híbrida Python/C++** orientada a producción.
 
-**Modelo Computacional:**
-* **Grafo:** $G = (V, E)$, donde $V = \{0, 1, ..., n\}$ es el conjunto de vértices (0 es la matriz logística/depósito central, $1..n$ son las ciudades/clientes) y $E$ son las aristas que los conectan.
-* **Costos:** Distancia euclidiana minimizada en todo el recorrido.
-* **Restricción estricta:** La sumatoria de la demanda de los clientes en una ruta $R_k$ no puede superar la capacidad máxima del vehículo ($Q$). Todos los productos deben ser entregados.
+Resuelve instancias complejas mediante orquestación inteligente de múltiples heurísticas:
+- **Motor de Construcción Inicial:** Generación modular de semillas concurrentes (inspirado en VeRyPy)
+- **Motor de Optimización:** Simulated Annealing con calibración dinámica vía DRL (inspirado en pytorch-drl4vrp)
+- **Motor Evaluador de Costos:** Matrices de adyacencia dirigidas en C++ (inspirado en Vroom)
+- **Operador de Pulido:** Búsqueda local 3-opt LKH-inspired para refinamiento intra-ruta
 
----
-
-## ⚙️ 2. Algoritmos y Análisis de Complejidad
-
-Implementamos y comparamos experimentalmente dos enfoques algorítmicos. Ambos aseguran validez matemática y respeto de restricciones de capacidad.
-
-### A. Algoritmo Constructivo: Greedy (Vecino Más Cercano)
-Construimos la solución paso a paso, tomando siempre el nodo no visitado más cercano cuya demanda no exceda la capacidad restante del vehículo.
-* **Complejidad Temporal:** $\mathcal{O}(n^2)$ — En el peor de los casos, buscamos la distancia mínima contra todos los nodos restantes en cada iteración.
-* **Complejidad Espacial:** $\mathcal{O}(n)$ — Almacenamos estados de nodos visitados y la estructura de rutas.
-
-### B. Metaheurística: Simulated Annealing (Recocido Simulado con 2-opt)
-Aplicamos un algoritmo de búsqueda local que escapa de óptimos locales aceptando soluciones peores temporalmente, controladas por una función de temperatura decreciente. La vecindad se genera mediante *2-opt* intra-ruta.
-* **Complejidad Temporal:** $\mathcal{O}(N_{iter})$ — Independiente de $n$ gracias al recálculo mediante $Delta$, donde $N_{iter} \approx \lceil \log(T_{min}/T_0) / \log(\alpha) \rceil$.
-* **Complejidad Espacial:** $\mathcal{O}(n)$ — Mantenemos en memoria la solución actual y el estado vecino temporal.
+**Propósito:** Proporcionar un solver versátil que escale de 50 a 100k+ clientes, manteniendo trazabilidad académica y producción-grade en deployments.
 
 ---
 
-## 🖥️ 3. Interfaz Gráfica de Usuario (GUI)
+## 🏗️ Arquitectura (Hybrid Python/C++)
 
-Desarrollamos la interfaz con el framework **Qt 6** y cumple con el 100% de los requisitos del sistema que definimos:
-- [x] **Registrar configuración:** permite ingreso manual de clientes (ubicación X, Y, demanda) y configuración de capacidad máxima de vehículos ($Q$).
-- [x] **Renderizado visual:** dibuja las rutas generadas en un plano cartesiano interactivo 2D (`QGraphicsView`), asignando colores por vehículo.
-- [x] **Métricas en tiempo real:** muestra la distancia total recorrida y verifica la validez de la carga.
-- [x] **Comparación experimental:** ejecuta múltiples algoritmos en paralelo para evaluar y mostrar métricas cruzadas.
-- [x] **Cronometrado de CPU:** despliega el tiempo de ejecución (en milisegundos) aislando el cálculo lógico del renderizado.
+```
+vrp_project/
+├── backend_python/           # Orquestador, dominio, API REST
+│   ├── api/                  # FastAPI endpoints
+│   ├── models/               # Entidades (Instancia, Cliente, Solución, Ruta)
+│   ├── persistence/          # Adapters (MongoDB, PostgreSQL)
+│   ├── service/              # Orquestación (solver_orchestrator, validation)
+│   └── tests/                # Suite TDD (unit + integration)
+│
+├── core_cpp/                 # Núcleo algorítmico de alto rendimiento
+│   ├── include/
+│   │   ├── graph.hpp         # Estructura de grafo dirigido
+│   │   ├── cost_matrix.hpp   # Matriz de adyacencia asimétrica
+│   │   ├── builders/         # Heurísticas de construcción
+│   │   ├── optimizers/       # Motores de optimización (SA, ILS)
+│   │   ├── operators/        # Operadores locales (2-opt, 3-opt, Ruin-Recreate)
+│   │   ├── solution.hpp      # Estructura de solución
+│   │   └── bindings.hpp      # Interface pybind11
+│   ├── src/                  # Implementaciones .cpp
+│   └── tests/                # Tests unitarios C++
+│
+├── tests/                    # Suite integrada (Python + C++)
+│   ├── unit/
+│   ├── integration/
+│   └── fixtures/
+│       ├── instances.json
+│       ├── benchmarks/
+│       │   ├── small_instances.json    # <100 nodos
+│       │   ├── medium_instances.json   # 100-1k nodos
+│       │   └── large_instances.json    # >1k nodos
+│
+├── docs/
+│   ├── README.md             # Este archivo
+│   ├── ARCHITECTURE.md       # Diseño técnico en detalle
+│   ├── API.md               # Especificación REST
+│   ├── CREDITS.md           # Atribuciones a fuentes académicas
+│   ├── adr/                 # Architecture Decision Records
+│   │   ├── 0001-hybrid-python-cpp.md
+│   │   ├── 0002-asymmetric-cost-matrices.md
+│   │   ├── 0003-drl-parameter-calibration.md
+│   │   └── 0004-ruin-recreate-operators.md
+│   └── references.md        # Repos inspiradores con mapeo de ideas
+│
+├── requirements.txt         # Dependencias Python + build tools
+├── CMakeLists.txt          # Build C++ + integración pybind11
+├── Makefile                # Helpers: make build, make test, make run
+├── docker-compose.yml      # Dev environment (PostgreSQL, MongoDB)
+├── .env.example            # Configuración de ejemplo
+├── CHANGELOG.md            # Historia de cambios (migración)
+└── .gitignore
+```
+
+### Principios de Diseño
+
+- **YAGNI:** Sin abstracciones especulativas. Cada componente existe porque es necesario.
+- **Inmutabilidad:** Datos entre Python↔C++ se pasan como estructuras inmutables (zero-copy via numpy).
+- **Trazabilidad:** Cada decisión arquitectónica está documentada en ADRs con referencias explícitas a fuentes académicas.
+- **TDD:** Tests validan tanto orquestación Python como rendimiento C++.
 
 ---
 
-## 📁 4. Estructura del Proyecto y Casos de Prueba
+## 🎯 Características Principales
 
-```text
-VRP_Project/
-├── CMakeLists.txt
-├── README.md
-├── data/                          # Dataset de experimentación
-│   ├── pequenas/                  # n = 10, verificables manualmente
-│   ├── medianas/                  # n = 10^3
-│   ├── grandes/                   # n = 10^6
-│   └── extremas/                  # n = 10^10 (Generadas on-the-fly)
-├── docs/                          # Entregables académicos
-│   ├── Informe_Final_VRP.pdf      # Análisis, pseudocódigos y escalabilidad
-│   └── graficos_resultados/       # Gráficos de comparación algorítmica
-└── src/
-    ├── main.cpp                   
-    ├── core/                      # Dominio matemático puro (Grafo, Nodos)
-    ├── algorithms/                # Implementación de Greedy y SA
-    ├── io/                        # Parsing tipo CVRPLIB
-    └── gui/                       # Capa visual (Qt)
+### Motor de Construcción Inicial
+- Generación modular de múltiples semillas concurrentes (VeRyPy-inspired)
+- Estrategias: Nearest Neighbor, Farthest, Random, Regret-based
+- Lanzamiento paralelo en Python con recolección de mejores soluciones
+
+### Motor de Optimización
+- **Simulated Annealing** clásico + calibración dinámica de temperatura vía DRL (pytorch-drl4vrp-inspired)
+- Operadores de movimiento: 2-opt intra-ruta, Or-opt
+- Fallback a Ruin-Recreate (jsprit-inspired) si estancamiento
+
+### Motor Evaluador de Costos
+- Matrices de adyacencia **dirigidas** (no asume simetría euclidiana)
+- Cálculo en C++ con pybind11 binding (zero-copy numpy arrays)
+- Soporte para: distancias euclidiana, Manhattan, custom (OSRM/Valhalla-ready)
+
+### Operador de Pulido Final
+- 3-opt LKH-inspired para refinamiento intra-ruta post-optimización
+- Garantía de no-deterioro: solo acepta movimientos que mejoran
+
+### API REST
+- `POST /solve` — Resuelve una instancia (async)
+- `GET /solve/{job_id}` — Obtiene resultado
+- `POST /validate` — Valida invariantes de solución
+- `GET /instances` — Lista instancias persistidas
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+- Python 3.11+
+- C++20 compiler (GCC 9+, Clang 11+)
+- CMake 3.20+
+- Docker (opcional, para dev env)
+
+### Build & Run
+
+```bash
+# Setup
+python -m venv venv
+source venv/bin/activate  # o venv\Scripts\activate en Windows
+pip install -r requirements.txt
+
+# Build C++ core
+make build
+
+# Run tests
+make test
+
+# Start API server
+make run
+# API disponible en http://localhost:8000
+```
+
+### Dev Environment (Docker)
+
+```bash
+docker-compose up -d
+# PostgreSQL + MongoDB listos en localhost
+make build && make test
+```
+
+---
+
+## 📊 Rendimiento Esperado
+
+| Tamaño Instancia | Nodos | Tiempo Solve | Hardware |
+|---|---|---|---|
+| Pequeña | <100 | 10-50ms | CPU (cualquiera) |
+| Mediana | 100-1k | 100-500ms | CPU moderno |
+| Grande | 1k-10k | 1-5s | CPU moderno + 8GB RAM |
+
+---
+
+## 📚 Documentación
+
+- **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** — Diseño técnico profundo
+- **[API.md](docs/API.md)** — Especificación REST con ejemplos
+- **[CREDITS.md](docs/CREDITS.md)** — Tabla de atribuciones académicas
+- **[ADRs](docs/adr/)** — Decisiones arquitectónicas justificadas
+- **[references.md](docs/references.md)** — Mapeo repos → ideas aplicadas
+
+---
+
+## 🎓 Créditos y Referencias Académicas
+
+Este proyecto integra investigación e implementaciones de código abierto reconocidas:
+
+| Fuente | Contribución | URL |
+|--------|--------------|-----|
+| **Vroom** | Matrices de costo dirigidas y evaluación asincrónica | https://github.com/VROOM-Project/vroom |
+| **LKH** | Búsqueda local de alto rendimiento (3-opt) | http://www.akira.ruc.dk/~keld/research/LKH/ |
+| **VeRyPy** | Generación modular de heurísticas semilla | https://github.com/tpvasconcelos/routetools |
+| **PyVRP** | Arquitectura híbrida Python/C++ y bindings pybind11 | https://github.com/PyVRP/PyVRP |
+| **pytorch-drl4vrp** | Calibración dinámica de parámetros vía Deep RL | https://github.com/yd-kwon/pytorch-drl4vrp |
+| **jsprit** | Paradigma destructivo/constructivo (Ruin-Recreate) | https://github.com/graphhopper/jsprit |
+| **timefold-quickstarts** | Aislamiento y validación de invariantes | https://github.com/TimefoldAI/timefold-quickstarts |
+| **Rosomaxa (vrp)** | Gestión de memoria inmutable y zero-copy | https://github.com/reinterpretcat/vrp |
+| **Open-VRP** | Filosofía TDD en heurísticas | https://github.com/openvrp/open-vrp |
+| **VRP-RL** | Pre-clasificación de instancias vía clustering | https://github.com/OptMLGroup/VRP-RL |
+
+Ver [CREDITS.md](docs/CREDITS.md) para detalles de cada contribución.
+
+---
+
+## 📄 Licencia
+
+Este proyecto es de **uso libre** bajo licencia [MIT/Apache 2.0 — pendiente de definir].
+
+---
+
+## 👥 Autores
+
+- **Grupo de 3 integrantes** — Desarrollo y arquitectura
+- **Docente:** GUERRA GRADOS, Luis Angel — Supervisión académica
+- **Comunidad Open Source** — Referencias y benchmarking
+
+---
+
+## 🔗 Enlaces Útiles
+
+- [Especificación VRP Clásica](https://en.wikipedia.org/wiki/Vehicle_routing_problem)
+- [CVRPLIB — Benchmark Estándar](http://vrp.atd-lab.inf.puc-rio.br/)
+- [OR-Tools de Google](https://developers.google.com/optimization)
+
+---
+
+**Última actualización:** 2026-07-23  
+**Versión:** 0.1.0-alpha (Migración en progreso)

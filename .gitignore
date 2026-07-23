@@ -1,3 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+*.egg-info/
+dist/
 build/
-.qtcreator/
-*.user
+.pytest_cache/
+.coverage
+htmlcov/
+
+# C++ Build
+build/
+*.o
+*.a
+*.lib
+*.dll
+*.so.*
+.cmake/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment
+.env
+.env.local
+
+# Temporary
+*.tmp
+*.bak
+*.orig
+
+# Binaries
+*.exe
+*.out
+
+# Data/Benchmarks
+data/large_instances/
+benchmarks/results/
+
+# Docs build
+docs/_build/
+
+# Claude Code (private)
+.claude/
