@@ -1,12 +1,20 @@
 """
 MongoDB Adapter: Solucion + Ruta + CostMatrix persistence.
 
-Mínimo sin ORM. Usa json serialization para documentos.
+Conecta a MongoDB usando pymongo.
 """
 
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
+import os
 from backend_python.models import Solucion, Ruta
+
+try:
+    from pymongo import MongoClient
+    from pymongo.errors import ServerSelectionTimeoutError
+    HAS_PYMONGO = True
+except ImportError:
+    HAS_PYMONGO = False
 
 
 class MongoDBAdapter:
@@ -14,19 +22,43 @@ class MongoDBAdapter:
     Adapter para persistencia en MongoDB.
 
     Colecciones:
-    - soluciones: { instancia_id, rutas[], total_cost, timestamp, metadata }
-    - cost_matrices: { instancia_id, n, data_binary, timestamp }
+    - soluciones: { _id, instancia_id, rutas[], total_cost, timestamp, metadata }
+    - cost_matrices: { _id, instancia_id, n, data_binary, timestamp }
     """
 
-    def __init__(self, connection_string: str):
+    def __init__(self, connection_string: str = None):
         """
         Args:
             connection_string: "mongodb://localhost:27017/vrp_db"
+                             If None, uses MONGO_URL env var
         """
+        if connection_string is None:
+            connection_string = os.getenv("MONGO_URL", "mongodb://localhost:27017/vrp_db")
+
         self.connection_string = connection_string
+        self.client = None
         self.db = None
-        # In real implementation: from pymongo import MongoClient
-        # self.db = MongoClient(connection_string)["vrp_db"]
+
+        if HAS_PYMONGO:
+            try:
+                self.client = MongoClient(connection_string, serverSelectionTimeoutMS=5000)
+                self.client.admin.command("ping")  # Test connection
+                self.db = self.client.vrp_db
+                self._init_indexes()
+            except ServerSelectionTimeoutError:
+                raise ConnectionError(f"MongoDB connection failed: {connection_string}")
+
+    def _init_indexes(self):
+        """Create indexes for collections."""
+        if self.db is None:
+            return
+
+        # Indexes for soluciones
+        self.db.soluciones.create_index([("instancia_id", 1), ("timestamp", -1)])
+        self.db.soluciones.create_index([("instancia_id", 1), ("total_cost", 1)])
+
+        # Indexes for cost_matrices
+        self.db.cost_matrices.create_index([("instancia_id", 1)], unique=True)
 
     def save_solution(self, solution: Solucion, metadata: Dict[str, Any] = None) -> bool:
         """
@@ -39,25 +71,29 @@ class MongoDBAdapter:
         Returns:
             True if successful
         """
-        # Pseudo-code:
-        # doc = {
-        #     "_id": f"{solution.instancia_id}_{timestamp}",
-        #     "instancia_id": solution.instancia_id,
-        #     "rutas": [
-        #         {
-        #             "vehicle_id": ruta.vehicle_id,
-        #             "sequence": ruta.secuencia,
-        #             "cost": ruta.costo
-        #         }
-        #         for ruta in solution.rutas
-        #     ],
-        #     "total_cost": solution.costo_total,
-        #     "timestamp": datetime.utcnow(),
-        #     "metadata": metadata or {}
-        # }
-        # self.db.soluciones.insert_one(doc)
+        if self.db is None:
+            return False
 
-        return True  # Stub
+        try:
+            doc = {
+                "_id": f"{solution.instancia_id}_{datetime.now(timezone.utc).isoformat()}",
+                "instancia_id": solution.instancia_id,
+                "rutas": [
+                    {
+                        "vehicle_id": ruta.vehicle_id,
+                        "sequence": ruta.secuencia,
+                        "cost": ruta.costo
+                    }
+                    for ruta in solution.rutas
+                ],
+                "total_cost": solution.costo_total,
+                "timestamp": datetime.now(timezone.utc),
+                "metadata": metadata or {}
+            }
+            self.db.soluciones.insert_one(doc)
+            return True
+        except Exception:
+            return False
 
     def load_solution(self, instancia_id: str, timestamp: Optional[str] = None) -> Optional[Solucion]:
         """
@@ -65,31 +101,70 @@ class MongoDBAdapter:
 
         Args:
             instancia_id: Instance ID
-            timestamp: Optional - load specific version
+            timestamp: Optional - load specific version (ISO format)
 
         Returns:
             Solucion or None if not found
         """
-        # Pseudo-code:
-        # query = {"instancia_id": instancia_id}
-        # if timestamp:
-        #     query["timestamp"] = {"$lte": datetime.fromisoformat(timestamp)}
-        # doc = self.db.soluciones.find_one(query, sort=[("timestamp", -1)])
-        # IF doc FOUND:
-        #     rutas = [Ruta(...) for r in doc["rutas"]]
-        #     return Solucion(instancia_id=doc["instancia_id"], rutas=rutas, ...)
+        if self.db is None:
+            return None
 
-        return None  # Stub
+        try:
+            query = {"instancia_id": instancia_id}
+            if timestamp:
+                query["timestamp"] = {"$lte": datetime.fromisoformat(timestamp)}
+
+            doc = self.db.soluciones.find_one(query, sort=[("timestamp", -1)])
+
+            if not doc:
+                return None
+
+            # Reconstruct Solucion
+            rutas = [
+                Ruta(
+                    vehicle_id=r["vehicle_id"],
+                    secuencia=r["sequence"],
+                    costo=r["cost"]
+                )
+                for r in doc["rutas"]
+            ]
+
+            return Solucion(
+                instancia_id=doc["instancia_id"],
+                rutas=rutas,
+                costo_total=doc["total_cost"]
+            )
+
+        except Exception:
+            return None
 
     def list_solutions(self, instancia_id: str) -> List[Dict[str, Any]]:
         """
         List all solutions for instance.
 
         Returns:
-            List of { timestamp, total_cost, gap_to_best }
+            List of { _id, timestamp, total_cost }
         """
-        # SELECT * FROM soluciones WHERE instancia_id ORDER BY timestamp DESC
-        return []  # Stub
+        if self.db is None:
+            return []
+
+        try:
+            docs = list(
+                self.db.soluciones.find(
+                    {"instancia_id": instancia_id},
+                    {"_id": 1, "timestamp": 1, "total_cost": 1}
+                ).sort("timestamp", -1)
+            )
+            return [
+                {
+                    "_id": doc["_id"],
+                    "timestamp": doc["timestamp"].isoformat(),
+                    "total_cost": doc["total_cost"]
+                }
+                for doc in docs
+            ]
+        except Exception:
+            return []
 
     def save_cost_matrix(self, instancia_id: str, n: int, data: bytes) -> bool:
         """
@@ -103,16 +178,25 @@ class MongoDBAdapter:
         Returns:
             True if successful
         """
-        # doc = {
-        #     "_id": f"{instancia_id}_costmatrix",
-        #     "instancia_id": instancia_id,
-        #     "n": n,
-        #     "data": data,  # Binary data (numpy array serialized)
-        #     "timestamp": datetime.utcnow()
-        # }
-        # self.db.cost_matrices.insert_one(doc)
+        if self.db is None:
+            return False
 
-        return True  # Stub
+        try:
+            doc = {
+                "_id": f"{instancia_id}_costmatrix",
+                "instancia_id": instancia_id,
+                "n": n,
+                "data": data,
+                "timestamp": datetime.utcnow()
+            }
+            self.db.cost_matrices.replace_one(
+                {"_id": doc["_id"]},
+                doc,
+                upsert=True
+            )
+            return True
+        except Exception:
+            return False
 
     def load_cost_matrix(self, instancia_id: str) -> Optional[tuple]:
         """
@@ -121,10 +205,21 @@ class MongoDBAdapter:
         Returns:
             (n, data) or None if not found
         """
-        # doc = self.db.cost_matrices.find_one({"instancia_id": instancia_id})
-        # IF doc: return (doc["n"], doc["data"])
+        if self.db is None:
+            return None
 
-        return None  # Stub
+        try:
+            doc = self.db.cost_matrices.find_one({"instancia_id": instancia_id})
+            if doc:
+                return (doc["n"], doc["data"])
+            return None
+        except Exception:
+            return None
+
+    def close(self):
+        """Close database connection."""
+        if self.client:
+            self.client.close()
 
 
 class MongoDBSchema:

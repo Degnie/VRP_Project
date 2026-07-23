@@ -11,8 +11,8 @@ target_include_directories(vrp_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-# C++20 features
-target_compile_features(vrp_core PRIVATE cxx_std_20)
+# C++17 features
+target_compile_features(vrp_core PRIVATE cxx_std_17)
 
 # Optimization flags
 if(MSVC)
