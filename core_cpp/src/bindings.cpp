@@ -9,9 +9,11 @@
 #include "../include/graph.hpp"
 #include "../include/cost_matrix.hpp"
 #include "../include/solution.hpp"
+#include "../include/builders/nearest_neighbor.hpp"
 
 namespace py = pybind11;
 using namespace vrp;
+using namespace vrp::builders;
 
 PYBIND11_MODULE(vrp_solver, m) {
     m.doc() = "VRP Solver - C++ core bindings";
@@ -55,4 +57,9 @@ PYBIND11_MODULE(vrp_solver, m) {
         .def("is_valid", &Solution::is_valid)
         .def("count_vehicles", &Solution::count_vehicles)
         .def("calculate_total_cost", &Solution::calculate_total_cost);
+
+    // NearestNeighbor solver binding
+    py::class_<NearestNeighbor>(m, "NearestNeighbor")
+        .def(py::init<const Graph&, const CostMatrix&, int, double>())
+        .def("solve", &NearestNeighbor::solve);
 }

@@ -1,65 +1,141 @@
-"""
-Modelos de Dominio: Instancia, Cliente, Solución, Ruta
-
-Estas entidades encapsulan la lógica del dominio VRP.
-Los algoritmos en C++ operan sobre estructuras de bajo nivel,
-pero siempre a través de estos modelos.
-"""
+"""Entidades de dominio para VRP: Coordinate, Cliente, Deposito, Flota, Instancia, Ruta, Solucion."""
 
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List
+import math
 
-@dataclass
-class Cliente:
-    """Representa un cliente con ubicación y demanda."""
-    id: int
+
+@dataclass(frozen=True)
+class Coordinate:
+    """Coordenada (x, y) inmutable."""
     x: float
     y: float
-    demanda: int
+
+
+@dataclass(frozen=True)
+class Cliente:
+    """Cliente: ubicación + demanda.
+    Invariantes:
+    - demanda > 0
+    """
+    id: int
+    coordenada: Coordinate
+    demanda: float
 
     def __post_init__(self):
-        if self.demanda < 0:
-            raise ValueError(f"Demanda debe ser positiva: {self.demanda}")
+        if self.demanda <= 0:
+            raise ValueError("demanda debe ser positiva")
 
-@dataclass
+
+@dataclass(frozen=True)
+class Deposito:
+    """Depósito (punto de origen/destino)."""
+    coordenada: Coordinate
+    nombre: str = "Depot"
+
+
+@dataclass(frozen=True)
+class Flota:
+    """Configuración de flota de vehículos.
+    Invariantes:
+    - num_vehiculos >= 1
+    - capacidad_por_vehiculo > 0
+    """
+    num_vehiculos: int
+    capacidad_por_vehiculo: float
+
+    def __post_init__(self):
+        if self.num_vehiculos < 1:
+            raise ValueError("num_vehiculos debe ser >= 1")
+        if self.capacidad_por_vehiculo <= 0:
+            raise ValueError("capacidad debe ser positiva")
+
+
+@dataclass(frozen=True)
 class Instancia:
-    """Configuración completa del problema VRP."""
+    """Instancia VRP: depósito + flota + clientes.
+    Invariantes:
+    - IDs de clientes únicos
+    - sum(demandas) <= num_vehiculos * capacidad
+    """
+    id: str
+    deposito: Deposito
+    flota: Flota
     clientes: List[Cliente]
-    capacidad_vehiculo: int
-    deposito_id: int = 0
 
     def __post_init__(self):
-        if self.capacidad_vehiculo <= 0:
-            raise ValueError(f"Capacidad debe ser positiva: {self.capacidad_vehiculo}")
-        if not any(c.id == self.deposito_id for c in self.clientes):
-            raise ValueError(f"Depósito {self.deposito_id} no existe en clientes")
+        # Verificar IDs únicos
+        ids = [c.id for c in self.clientes]
+        if len(ids) != len(set(ids)):
+            raise ValueError("IDs de clientes no son únicos")
 
-    @property
-    def n_clientes(self) -> int:
-        return len(self.clientes)
+        # Verificar demanda total
+        demanda_total = sum(c.demanda for c in self.clientes)
+        capacidad_total = self.flota.num_vehiculos * self.flota.capacidad_por_vehiculo
+        if demanda_total > capacidad_total:
+            raise ValueError("demanda total excede capacidad de la flota")
 
-@dataclass
+
+@dataclass(frozen=True)
 class Ruta:
-    """Secuencia de clientes visitados por un vehículo."""
-    vehiculo_id: int
-    secuencia: List[int]  # IDs de clientes, incluyendo depot al inicio y fin
-    costo: float = 0.0
+    """Ruta: secuencia de clientes para un vehículo.
+    Invariantes:
+    - secuencia no vacía
+    - costo >= 0
+    """
+    vehicle_id: int
+    secuencia: List[int]  # IDs de clientes
+    costo: float
 
-    def validar(self, instancia: Instancia) -> bool:
-        """Verificar invariantes de ruta."""
-        # TODO: Implementar validación
-        return True
+    def __post_init__(self):
+        if not self.secuencia:
+            raise ValueError("secuencia debe tener al menos 1 cliente")
+        if self.costo < 0:
+            raise ValueError("costo no puede ser negativo")
 
-@dataclass
+
+@dataclass(frozen=True)
 class Solucion:
-    """Solución completa al problema VRP."""
+    """Solución: conjunto de rutas.
+    Invariantes:
+    - Al menos 1 ruta
+    - costo_total == sum(ruta.costo)
+    - Cada cliente visitado exactamente una vez
+    """
+    instancia_id: str
     rutas: List[Ruta]
     costo_total: float
-    es_valida: bool = True
 
-    def validar(self, instancia: Instancia) -> bool:
-        """Verificar invariantes de solución."""
-        # TODO: Implementar validación de capacidad, cobertura, etc.
-        return True
+    def __post_init__(self):
+        if not self.rutas:
+            raise ValueError("solución debe tener al menos 1 ruta")
 
-__all__ = ["Cliente", "Instancia", "Ruta", "Solucion"]
+        # Verificar costo_total
+        suma_costos = sum(r.costo for r in self.rutas)
+        if abs(self.costo_total - suma_costos) > 1e-6:
+            raise ValueError("costo_total no coincide con suma de rutas")
+
+        # Verificar que cada cliente se visita una sola vez
+        todos_clientes = []
+        for ruta in self.rutas:
+            todos_clientes.extend(ruta.secuencia)
+
+        if len(todos_clientes) != len(set(todos_clientes)):
+            raise ValueError("cliente visitado múltiples veces")
+
+
+def distancia_euclidiana(a: Coordinate, b: Coordinate) -> float:
+    """Distancia euclidiana entre dos coordenadas."""
+    return math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2)
+
+
+__all__ = [
+    "Coordinate",
+    "Cliente",
+    "Deposito",
+    "Flota",
+    "Instancia",
+    "Ruta",
+    "Solucion",
+    "distancia_euclidiana",
+]

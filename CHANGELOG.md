@@ -7,6 +7,16 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ---
 
+## ⬆️ MIGRACIÓN: Academia → Producción (2026-07-23 en adelante)
+
+**Este punto marca la transición arquitectónica de la solución académica Qt/C++ al SaaS híbrido Python/C++.**
+
+La historia anterior del proyecto (trabajo académico UNMSM 2024-2026) se preserva en Git pero no se mezcla con esta rama. Ver [docs/adr/0001-hybrid-python-cpp.md](docs/adr/0001-hybrid-python-cpp.md) para justificación técnica.
+
+**Versioning:** A partir de aquí, semver estricto. v0.1.0-alpha inicia con base de arquitectura.
+
+---
+
 ## [0.1.0-alpha] — 2026-07-23
 
 ### 🔄 Migration (Academic → Production)

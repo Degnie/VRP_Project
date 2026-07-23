@@ -190,21 +190,20 @@ ctest --output-on-failure  # benchmark suite
 
 ---
 
-## Referencia Bibliográfica
+## Referencias de Benchmarking R&D
 
-**PyVRP: Hybrid Architecture for VRP Solving**
-- https://github.com/PyVRP/PyVRP
-- Fecha: 2023-2026 (vigente)
-- Pattern: Python orchestrator + C++20 backend
-- Status: Production-ready
-
-**pybind11: Seamless Operability Between C++11 and Python**
-- https://pybind11.readthedocs.io/
-- Ref: Simplifies zero-copy numpy integration
-
-**Vroom: Ultra-fast, Production-ready VRP Solver**
-- https://github.com/VROOM-Project/vroom
-- Ref: Validación de que arquitectura C++ puro es viable pero requiere API wrapper
+| Repositorio / Proyecto | Idea Extraída | Aplicación en Arquitectura |
+|---|---|---|
+| **Vroom** (https://github.com/VROOM-Project/vroom) | Cálculos espaciales asíncronos y matrices dirigidas en C++. | Base del Motor Evaluador de Costos (matrices asimétricas). |
+| **LKH** (http://www.akira.ruc.dk/~keld/research/LKH/) | Rigurosidad matemática para búsqueda local. | Subrutina final de "pulido" intra-ruta post-SA. |
+| **VeRyPy** (https://github.com/tpvasconcelos/routetools) | Generación modular de múltiples heurísticas semilla. | Evolución del Motor de Construcción Inicial (lanzamientos concurrentes). |
+| **PyVRP** (https://github.com/PyVRP/PyVRP) | Arquitectura hybrid Python/C++ + pybind11 bindings. | Stack de orquestación + bindings; patrón directo. |
+| **pytorch-drl4vrp** (https://github.com/yd-kwon/pytorch-drl4vrp) | Ajuste dinámico de parámetros vía DRL. | Control dinámico del "enfriamiento" del Simulated Annealing. |
+| **jsprit** (https://github.com/graphhopper/jsprit) | Paradigma destructivo/constructivo. | Operador de "Ruina y Recreación" alternativo. |
+| **timefold-quickstarts** (https://github.com/TimefoldAI/timefold-quickstarts) | Aislamiento de invariantes. | Separación de reglas estáticas en orquestador. |
+| **vrp (Rosomaxa)** (https://github.com/reinterpretcat/vrp) | Gestión de memoria inmutable. | Diseño del paso de datos (matrices) entre Python y C++. |
+| **Open-VRP** (https://github.com/openvrp/open-vrp) | Inmutabilidad en ejecución heurística. | Base conceptual para suite TDD. |
+| **VRP-RL** (https://github.com/OptMLGroup/VRP-RL) | Pre-clasificación de instancias. | Análisis de dispersión previo a invocar C++. |
 
 ---
 
