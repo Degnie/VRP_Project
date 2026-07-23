@@ -22,22 +22,28 @@ except ImportError:
 
 
 class SolverOrchestrator:
-    """Orquestador que secuencia construcción y optimización."""
+    """Orquestador que secuencia: Construcción (NN) → Optimización (SA) → Pulido (3-opt)."""
 
     def __init__(self, instance: Instancia):
         self.instance = instance
         self.solution = None
+        self.log = []
 
     def solve(self) -> Solucion:
         """
-        Resolver instancia completa: construcción greedy + validación.
+        Resolver instancia completa: NN → SA → 3-opt + validación.
 
-        Retorna: Solucion válida
+        Pipeline:
+        1. Nearest Neighbor (construcción)
+        2. Simulated Annealing (optimización)
+        3. 3-opt Polish (refinamiento)
+
+        Retorna: Solucion válida y optimizada
         """
         if not HAS_CPP_BINDINGS:
             return self._solve_python_fallback()
 
-        return self._solve_cpp()
+        return self._solve_cpp_pipeline()
 
     def _solve_python_fallback(self) -> Solucion:
         """
@@ -106,14 +112,16 @@ class SolverOrchestrator:
 
         return Ruta(vehicle_id=vehicle_id, secuencia=[], costo=0.0)
 
-    def _solve_cpp(self) -> Solucion:
+    def _solve_cpp_pipeline(self) -> Solucion:
         """
-        Resolver vía C++ bindings (Nearest Neighbor en C++).
+        Resolver vía C++ bindings con pipeline completo: NN → SA → 3-opt.
 
         Pasos:
         1. Build Graph + CostMatrix (C++)
-        2. Invoke NearestNeighbor.solve()
-        3. Convert Solution → Python Solucion
+        2. Nearest Neighbor (construcción)
+        3. Simulated Annealing (optimización con SA)
+        4. 3-opt Polish (refinamiento)
+        5. Convert Solution → Python Solucion
         """
         # 1. Build C++ graph
         graph = vrp_solver.Graph(self.instance.flota.num_vehiculos)
@@ -136,18 +144,41 @@ class SolverOrchestrator:
 
         cost_matrix = vrp_solver.CostMatrix.from_euclidean(coords)
 
-        # 3. Solve via Nearest Neighbor
-        solver = vrp_solver.NearestNeighbor(
+        # 3. Nearest Neighbor (construcción inicial)
+        self.log.append("Step 1: Nearest Neighbor construction")
+        nn_solver = vrp_solver.NearestNeighbor(
             graph,
             cost_matrix,
             0,  # depot id
             self.instance.flota.capacidad_por_vehiculo
         )
-        cpp_solution = solver.solve()
+        nn_solution = nn_solver.solve()
+        self.log.append(f"  NN cost: {nn_solution.total_cost:.2f}")
 
-        # 4. Convert C++ Solution → Python Solucion
+        # 4. Simulated Annealing (optimización)
+        self.log.append("Step 2: Simulated Annealing optimization")
+        sa_params = self._compute_sa_params()
+        sa_solver = vrp_solver.SimulatedAnnealing(
+            graph,
+            cost_matrix,
+            sa_params["T0"],
+            sa_params["alpha"],
+            sa_params["max_iters"]
+        )
+        sa_solution = sa_solver.solve(nn_solution)
+        self.log.append(f"  SA cost: {sa_solution.total_cost:.2f}")
+        self.log.append(f"  Improvement: {(nn_solution.total_cost - sa_solution.total_cost) / nn_solution.total_cost * 100:.2f}%")
+
+        # 5. 3-opt Polish (refinamiento final)
+        self.log.append("Step 3: 3-opt Polish")
+        for route in sa_solution.routes:
+            vrp_solver.ThreeOpt.improve(route, cost_matrix)
+        sa_solution.calculate_total_cost()
+        self.log.append(f"  3-opt cost: {sa_solution.total_cost:.2f}")
+
+        # 6. Convert C++ Solution → Python Solucion
         rutas = []
-        for cpp_route in cpp_solution.routes:
+        for cpp_route in sa_solution.routes:
             ruta = Ruta(
                 vehicle_id=cpp_route.vehicle_id,
                 secuencia=list(cpp_route.sequence),
@@ -158,8 +189,42 @@ class SolverOrchestrator:
         return Solucion(
             instancia_id=self.instance.id,
             rutas=rutas,
-            costo_total=cpp_solution.total_cost
+            costo_total=sa_solution.total_cost
         )
+
+    def _compute_sa_params(self) -> dict:
+        """
+        Compute Simulated Annealing parameters heuristically.
+
+        Heurística (Phase 2):
+        - T0 proporcional a dispersión de clientes
+        - alpha inversamente proporcional a tamaño
+        """
+        import math
+
+        n = len(self.instance.clientes)
+
+        # Compute client dispersal (average distance from centroid)
+        cx = sum(c.coordenada.x for c in self.instance.clientes) / n if n > 0 else 0
+        cy = sum(c.coordenada.y for c in self.instance.clientes) / n if n > 0 else 0
+
+        avg_distance = 0.0
+        for client in self.instance.clientes:
+            dx = client.coordenada.x - cx
+            dy = client.coordenada.y - cy
+            avg_distance += math.sqrt(dx * dx + dy * dy)
+        avg_distance /= n if n > 0 else 1
+
+        # Heuristic parameters
+        T0 = max(10.0, avg_distance / math.log(max(2, n)))
+        alpha = 0.95 if n < 100 else 0.98
+        max_iters = min(1000, max(100, 50 * n))
+
+        return {
+            "T0": T0,
+            "alpha": alpha,
+            "max_iters": max_iters
+        }
 
 
 def solve_instance(instance: Instancia) -> Solucion:

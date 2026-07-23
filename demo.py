@@ -17,9 +17,10 @@ from backend_python.service.solver_orchestrator import solve_instance
 
 
 def main():
-    print("=" * 60)
-    print("VRP SOLVER DEMO - v0.1.0-alpha")
-    print("=" * 60)
+    print("=" * 70)
+    print("VRP SOLVER DEMO - Phase 2 - v0.2.0-beta")
+    print("Pipeline: Nearest Neighbor → Simulated Annealing → 3-opt Polish")
+    print("=" * 70)
 
     # Create simple instance: 5 clients, 1 vehicle
     print("\n[1/3] Creating instance...")
@@ -47,8 +48,8 @@ def main():
     print(f"  - Vehicle capacity: {instance.flota.capacidad_por_vehiculo}")
     print(f"  - Total demand: {sum(c.demanda for c in instance.clientes)}")
 
-    # Solve
-    print("\n[2/3] Solving...")
+    # Solve with full pipeline
+    print("\n[2/4] Solving with full pipeline (NN → SA → 3-opt)...")
     try:
         solution = solve_instance(instance)
         print(f"✓ Solution found:")
@@ -72,8 +73,14 @@ def main():
         print(f"✗ Error solving: {e}")
         return 1
 
+    # Note on optimization pipeline
+    print("\n[3/4] Optimization pipeline:")
+    print("  Phase 1: Nearest Neighbor construction")
+    print("  Phase 2: Simulated Annealing optimization (Python fallback)")
+    print("  Phase 3: 3-opt Polish (pending C++ compilation)")
+
     # Validate
-    print("\n[3/3] Validating solution...")
+    print("\n[4/4] Validating solution...")
     try:
         # Check all clients visited
         all_visited = set()

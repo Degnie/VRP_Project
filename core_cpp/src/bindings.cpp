@@ -10,10 +10,14 @@
 #include "../include/cost_matrix.hpp"
 #include "../include/solution.hpp"
 #include "../include/builders/nearest_neighbor.hpp"
+#include "../include/optimizers/simulated_annealing.hpp"
+#include "../include/operators/local_search.hpp"
 
 namespace py = pybind11;
 using namespace vrp;
 using namespace vrp::builders;
+using namespace vrp::optimizers;
+using namespace vrp::operators;
 
 PYBIND11_MODULE(vrp_solver, m) {
     m.doc() = "VRP Solver - C++ core bindings";
@@ -62,4 +66,24 @@ PYBIND11_MODULE(vrp_solver, m) {
     py::class_<NearestNeighbor>(m, "NearestNeighbor")
         .def(py::init<const Graph&, const CostMatrix&, int, double>())
         .def("solve", &NearestNeighbor::solve);
+
+    // SimulatedAnnealing optimizer binding
+    py::class_<SimulatedAnnealing>(m, "SimulatedAnnealing")
+        .def(py::init<const Graph&, const CostMatrix&, double, double, int>(),
+             py::arg("graph"),
+             py::arg("cost_matrix"),
+             py::arg("initial_temp") = 100.0,
+             py::arg("cooling_rate") = 0.95,
+             py::arg("iterations") = 1000)
+        .def("solve", &SimulatedAnnealing::solve);
+
+    // Local search operators binding
+    py::class_<TwoOpt>(m, "TwoOpt")
+        .def_static("improve", &TwoOpt::improve);
+
+    py::class_<OrOpt>(m, "OrOpt")
+        .def_static("improve", &OrOpt::improve);
+
+    py::class_<ThreeOpt>(m, "ThreeOpt")
+        .def_static("improve", &ThreeOpt::improve);
 }
