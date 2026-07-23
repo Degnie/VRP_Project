@@ -61,7 +61,7 @@ Adoptar **arquitectura híbrida Python/C++** similar al patrón de **PyVRP**:
 
 **Backend Python:**
 - Framework: **FastAPI** (REST API ligero y rápido)
-- ORM: **SQLAlchemy** (PostgreSQL) + **MongoEngine** (MongoDB)
+- Persistencia: **psycopg/psycopg2** (PostgreSQL) + **pymongo** (MongoDB) — adapters directos con SQL/queries parametrizados, sin ORM (decisión revisada en CHANGELOG `0.3.0`, sección "Rechazado / Descartado": el esquema es de 3 tablas fijas sin migraciones dinámicas, un ORM no aporta beneficio medible)
 - Testing: **pytest** + fixtures
 - Validación: **Pydantic** para models
 - Concurrencia: Python async/await (construcción multisemilla)

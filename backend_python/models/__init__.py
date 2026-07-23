@@ -25,6 +25,8 @@ class Cliente:
     def __post_init__(self):
         if self.demanda <= 0:
             raise ValueError("demanda debe ser positiva")
+        if self.demanda != int(self.demanda):
+            raise ValueError("demanda debe ser un valor entero")
 
 
 @dataclass(frozen=True)

@@ -6,6 +6,7 @@ Conecta a MongoDB usando pymongo.
 
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
+import logging
 import os
 from backend_python.models import Solucion, Ruta
 
@@ -15,6 +16,8 @@ try:
     HAS_PYMONGO = True
 except ImportError:
     HAS_PYMONGO = False
+
+logger = logging.getLogger(__name__)
 
 
 class MongoDBAdapter:
@@ -92,7 +95,8 @@ class MongoDBAdapter:
             }
             self.db.soluciones.insert_one(doc)
             return True
-        except Exception:
+        except Exception as e:
+            logger.error(f"save_solution failed for {solution.instancia_id}: {e}")
             return False
 
     def load_solution(self, instancia_id: str, timestamp: Optional[str] = None) -> Optional[Solucion]:
@@ -135,7 +139,8 @@ class MongoDBAdapter:
                 costo_total=doc["total_cost"]
             )
 
-        except Exception:
+        except Exception as e:
+            logger.error(f"load_solution failed for {instancia_id}: {e}")
             return None
 
     def list_solutions(self, instancia_id: str) -> List[Dict[str, Any]]:
@@ -163,7 +168,8 @@ class MongoDBAdapter:
                 }
                 for doc in docs
             ]
-        except Exception:
+        except Exception as e:
+            logger.error(f"list_solutions failed for {instancia_id}: {e}")
             return []
 
     def save_cost_matrix(self, instancia_id: str, n: int, data: bytes) -> bool:
@@ -195,7 +201,8 @@ class MongoDBAdapter:
                 upsert=True
             )
             return True
-        except Exception:
+        except Exception as e:
+            logger.error(f"save_cost_matrix failed for {instancia_id}: {e}")
             return False
 
     def load_cost_matrix(self, instancia_id: str) -> Optional[tuple]:
@@ -213,7 +220,8 @@ class MongoDBAdapter:
             if doc:
                 return (doc["n"], doc["data"])
             return None
-        except Exception:
+        except Exception as e:
+            logger.error(f"load_cost_matrix failed for {instancia_id}: {e}")
             return None
 
     def close(self):

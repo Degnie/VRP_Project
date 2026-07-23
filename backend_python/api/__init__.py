@@ -24,6 +24,7 @@ class InstanceRequest(BaseModel):
     demands: List[float]
     num_vehicles: int
     vehicle_capacity: float
+    depot_coordinates: tuple = (0.0, 0.0)
 
 
 class SolutionResponse(BaseModel):
@@ -90,11 +91,12 @@ def create_app() -> FastAPI:
         """
         try:
             # Build Instancia from request
-            depot = Deposito(Coordinate(0.0, 0.0), "Depot")
+            depot = Deposito(Coordinate(*request.depot_coordinates), "Depot")
             flota = Flota(request.num_vehicles, request.vehicle_capacity)
             clientes = [
+                # id arranca en 1: el pipeline C++ reserva id=0 para el depósito
                 Cliente(
-                    id=i,
+                    id=i + 1,
                     coordenada=Coordinate(request.coordinates[i][0], request.coordinates[i][1]),
                     demanda=request.demands[i]
                 )
@@ -110,8 +112,10 @@ def create_app() -> FastAPI:
 
             # Persist instance (PostgreSQL)
             if pg_adapter:
-                pg_adapter.save_instance(instance)
-                logger.info(f"Saved instance {request.instancia_id} to PostgreSQL")
+                if pg_adapter.save_instance(instance):
+                    logger.info(f"Saved instance {request.instancia_id} to PostgreSQL")
+                else:
+                    logger.warning(f"Failed to save instance {request.instancia_id} to PostgreSQL")
 
             # Solve
             logger.info(f"Solving instance {request.instancia_id}")
@@ -119,8 +123,10 @@ def create_app() -> FastAPI:
 
             # Persist solution (MongoDB)
             if mongo_adapter:
-                mongo_adapter.save_solution(solution, {"phase": "Phase 3", "status": "completed"})
-                logger.info(f"Saved solution for {request.instancia_id} to MongoDB")
+                if mongo_adapter.save_solution(solution, {"phase": "Phase 3", "status": "completed"}):
+                    logger.info(f"Saved solution for {request.instancia_id} to MongoDB")
+                else:
+                    logger.warning(f"Failed to save solution for {request.instancia_id} to MongoDB")
 
             # Format response
             routes = [
