@@ -2,7 +2,7 @@
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 import logging
 
 from backend_python.config import get_config
@@ -24,7 +24,7 @@ class InstanceRequest(BaseModel):
     demands: List[float]
     num_vehicles: int
     vehicle_capacity: float
-    depot_coordinates: tuple = (0.0, 0.0)
+    depot_coordinates: Tuple[float, float] = (0.0, 0.0)
 
 
 class SolutionResponse(BaseModel):

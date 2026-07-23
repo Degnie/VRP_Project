@@ -123,8 +123,8 @@ class SolverOrchestrator:
         4. 3-opt Polish (refinamiento)
         5. Convert Solution → Python Solucion
         """
-        # 1. Build C++ graph
-        graph = vrp_solver.Graph(self.instance.flota.num_vehiculos)
+        # 1. Build C++ graph (1 nodo depósito + N clientes; NO num_vehiculos)
+        graph = vrp_solver.Graph(1 + len(self.instance.clientes))
 
         # Add depot (id=0)
         graph.add_node(0, self.instance.deposito.coordenada.x,

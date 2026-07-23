@@ -4,25 +4,21 @@ services:
   postgres:
     image: postgis/postgis:16-3.3
     environment:
-      POSTGRES_DB: vrp_dev
-      POSTGRES_USER: vrp_user
-      POSTGRES_PASSWORD: vrp_pass
+      POSTGRES_DB: vrp_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: vrp_password
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U vrp_user"]
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   mongodb:
     image: mongo:7.0
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: vrp_user
-      MONGO_INITDB_ROOT_PASSWORD: vrp_pass
-      MONGO_INITDB_DATABASE: vrp_dev
     ports:
       - "27017:27017"
     volumes:

@@ -61,6 +61,15 @@ class TestCliente:
                 demanda=-50  # ❌
             )
 
+    def test_cliente_demanda_debe_ser_entera(self):
+        """Invariante: demanda debe ser un valor entero (core C++ usa demand: int)."""
+        with pytest.raises(ValueError, match="demanda debe ser un valor entero"):
+            Cliente(
+                id=1,
+                coordenada=Coordinate(x=10.0, y=20.0),
+                demanda=10.5  # ❌
+            )
+
 
 class TestDepositoFlota:
     """Configuración del depósito y flota."""
