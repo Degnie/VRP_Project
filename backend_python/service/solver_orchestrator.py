@@ -41,9 +41,16 @@ class SolverOrchestrator:
         Retorna: Solucion válida y optimizada
         """
         if not HAS_CPP_BINDINGS:
-            return self._solve_python_fallback()
+            solution = self._solve_python_fallback()
+        else:
+            solution = self._solve_cpp_pipeline()
 
-        return self._solve_cpp_pipeline()
+        if len(solution.rutas) > self.instance.flota.num_vehiculos:
+            raise ValueError(
+                "solución requiere más vehículos de los disponibles en la flota"
+            )
+
+        return solution
 
     def _solve_python_fallback(self) -> Solucion:
         """

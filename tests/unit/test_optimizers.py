@@ -8,7 +8,7 @@ from backend_python.models import (
     Coordinate, Cliente, Deposito, Flota, Instancia,
     Ruta, Solucion
 )
-from backend_python.service.solver_orchestrator import SolverOrchestrator
+from backend_python.service.solver_orchestrator import SolverOrchestrator, solve_instance
 
 
 @pytest.fixture
@@ -120,8 +120,7 @@ class TestLocalOperators:
 
     def test_3opt_is_stricter_than_2opt(self):
         """3-opt debe explorar más que 2-opt (pero con poda)."""
-        # Validated implicitly if SA solution is better with 3-opt polish
-        assert True  # Placeholder
+        pytest.skip("Requires C++ bindings to validate")
 
 
 class TestSolverPipeline:
@@ -144,6 +143,31 @@ class TestSolverPipeline:
         # Log should be populated if using C++ (skipped here)
         # For Python fallback, log might be empty
         assert isinstance(orchestrator.log, list)
+
+
+class TestFleetSizeValidation:
+    """Tests para validar que la solución no exceda num_vehiculos disponibles."""
+
+    def test_solve_rejects_solution_needing_more_vehicles_than_fleet(self):
+        """
+        Demanda total cabe en la capacidad agregada, pero el NN greedy
+        fragmenta en más rutas de las que hay vehículos disponibles
+        (3 clientes de demanda 60 c/u, ningún par cabe junto en capacidad 100,
+        pero solo hay 2 vehículos -> requiere 3 rutas).
+        """
+        depot = Deposito(Coordinate(0.0, 0.0), "Depot")
+        flota = Flota(num_vehiculos=2, capacidad_por_vehiculo=100)
+        clientes = [
+            Cliente(1, Coordinate(10.0, 10.0), 60),
+            Cliente(2, Coordinate(-10.0, 10.0), 60),
+            Cliente(3, Coordinate(10.0, -10.0), 60),
+        ]
+        instance = Instancia(
+            id="test_overflow", deposito=depot, flota=flota, clientes=clientes
+        )
+
+        with pytest.raises(ValueError, match="más vehículos"):
+            solve_instance(instance)
 
 
 class TestOptimizationQuality:

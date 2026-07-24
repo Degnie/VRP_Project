@@ -8,6 +8,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 import logging
 import os
+import time
 from backend_python.models import Solucion, Ruta
 
 try:
@@ -18,6 +19,9 @@ except ImportError:
     HAS_PYMONGO = False
 
 logger = logging.getLogger(__name__)
+
+CONNECT_RETRIES = 3
+CONNECT_RETRY_DELAY_SECONDS = 1
 
 
 class MongoDBAdapter:
@@ -43,13 +47,24 @@ class MongoDBAdapter:
         self.db = None
 
         if HAS_PYMONGO:
-            try:
-                self.client = MongoClient(connection_string, serverSelectionTimeoutMS=5000)
-                self.client.admin.command("ping")  # Test connection
-                self.db = self.client.vrp_db
-                self._init_indexes()
-            except ServerSelectionTimeoutError:
-                raise ConnectionError(f"MongoDB connection failed: {connection_string}")
+            last_error = None
+            for attempt in range(1, CONNECT_RETRIES + 1):
+                try:
+                    self.client = MongoClient(connection_string, serverSelectionTimeoutMS=5000)
+                    self.client.admin.command("ping")  # Test connection
+                    self.db = self.client.vrp_db
+                    self._init_indexes()
+                    return
+                except ServerSelectionTimeoutError as e:
+                    last_error = e
+                    logger.warning(
+                        f"MongoDB connection attempt {attempt}/{CONNECT_RETRIES} failed: {e}"
+                    )
+                    if attempt < CONNECT_RETRIES:
+                        time.sleep(CONNECT_RETRY_DELAY_SECONDS)
+            raise ConnectionError(
+                f"MongoDB connection failed after {CONNECT_RETRIES} attempts: {connection_string} ({last_error})"
+            )
 
     def _init_indexes(self):
         """Create indexes for collections."""

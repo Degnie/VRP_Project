@@ -145,6 +145,25 @@ class TestSolveEndpoint:
             assert "total_cost" in data
             assert "num_routes" in data
 
+    def test_solve_rejects_malformed_coordinates(self):
+        """POST /solve con coordinates de longitud incorrecta debe responder 422, no 500."""
+        from fastapi.testclient import TestClient
+        from backend_python.api import create_app
+
+        app = create_app()
+        client = TestClient(app)
+
+        request_data = {
+            "instancia_id": "test_bad_coords",
+            "coordinates": [(1.0, 2.0, 3.0)],  # ❌ 3 elementos en vez de 2
+            "demands": [10],
+            "num_vehicles": 1,
+            "vehicle_capacity": 100
+        }
+
+        response = client.post("/solve", json=request_data)
+        assert response.status_code == 422
+
     def test_instances_list_endpoint(self):
         """GET /instances debe responder."""
         from fastapi.testclient import TestClient

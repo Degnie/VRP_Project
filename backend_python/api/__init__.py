@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 class InstanceRequest(BaseModel):
     """Request para resolver una instancia."""
     instancia_id: str
-    coordinates: List[tuple]  # [(x1, y1), (x2, y2), ...]
+    coordinates: List[Tuple[float, float]]  # [(x1, y1), (x2, y2), ...]
     demands: List[float]
     num_vehicles: int
     vehicle_capacity: float

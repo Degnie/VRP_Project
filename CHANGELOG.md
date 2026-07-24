@@ -201,17 +201,52 @@ Transición de arquitectura monolítica Qt/C++17 a híbrida Python/C++ para esca
 
 ---
 
+## [0.3.3] — 2026-07-23
+
+### 🐛 Fixed
+
+- **Número de rutas generado por el solver nunca se validaba contra `flota.num_vehiculos` (defecto compartido por ambos caminos de solución — C++ y fallback Python — no exclusivo de uno).** `Instancia.__post_init__` (`backend_python/models/__init__.py`) valida que la demanda total quepa en la capacidad agregada (`num_vehiculos * capacidad`), pero eso es una cota agregada: no garantiza que un bin-packing greedy (Nearest Neighbor, tanto `NearestNeighbor::solve()` en C++ como `_construct_route_greedy` en el fallback Python de `solver_orchestrator.py`) reparta esa demanda en `num_vehiculos` rutas o menos. Era matemáticamente posible que la demanda cupiera en la capacidad total pero que el greedy necesitara más rutas que vehículos disponibles, y el resultado se aceptaba tal cual sin ninguna señal de infactibilidad. Fix: `SolverOrchestrator.solve()` (`backend_python/service/solver_orchestrator.py`) ahora verifica `len(solution.rutas) > self.instance.flota.num_vehiculos` tras obtener la solución (de cualquiera de los dos caminos) y lanza `ValueError` si se excede — no se tocó el algoritmo de construcción en sí, solo se añadió la validación posterior, consistente con el patrón de invariantes que el dominio ya usa. Test de regresión: `tests/unit/test_optimizers.py::TestFleetSizeValidation`, con un caso construido explícitamente (3 clientes de demanda 60 c/u, capacidad 100 por vehículo — ningún par cabe junto —, 2 vehículos disponibles: demanda total 180 ≤ 200 pero greedy requiere 3 rutas).
+
+---
+
+## [0.3.4] — 2026-07-23
+
+### 🐛 Fixed
+
+- **`tests/unit/test_optimizers.py:121-124` — test placeholder sin aserción real.** `test_3opt_is_stricter_than_2opt` contenía únicamente `assert True` con un comentario que no correspondía a ninguna validación, dando falsa sensación de cobertura de 3-opt. Cambiado a `pytest.skip("Requires C++ bindings to validate")`, consistente con sus dos tests vecinos en la misma clase (`TestLocalOperators`) que ya usan ese patrón honesto para lo que depende de bindings C++ no compilados en este entorno.
+
+---
+
+## [0.3.5] — 2026-07-23
+
+### 🐛 Fixed
+
+- **`api/__init__.py:23` — `coordinates: List[tuple]` sin longitud fija (mismo defecto de tipado ya corregido en `depot_coordinates` vía `0.3.2`, previamente dejado fuera de alcance).** Una `tuple` sin parametrizar no valida cantidad de elementos: un request con `coordinates` conteniendo entradas de longitud distinta a 2 pasaba la validación de Pydantic sin error. Tipado como `List[Tuple[float, float]]`, delegando la validación a Pydantic — ahora responde `422` con mensaje claro en vez de comportamiento indefinido más adelante en el pipeline. Verificado manualmente vía `TestClient` y cubierto por el nuevo test `test_solve_rejects_malformed_coordinates` en `tests/unit/test_api_integration.py`. Sin cambios de compatibilidad para clientes que ya envían pares `[x, y]` válidos (11 tests de `/solve` existentes siguen pasando sin modificación).
+
+---
+
+## [0.3.6] — 2026-07-23
+
+### ✨ Added
+
+- **Retry con backoff fijo en la conexión inicial de `PostgreSQLAdapter` y `MongoDBAdapter`** (`backend_python/persistence/postgres_adapter.py`, `mongodb_adapter.py`). Hasta ahora un fallo transitorio de red tumbaba el adapter en el primer intento (decisión previamente rechazada en `0.3.0`, ver nota abajo). Reconsiderado porque el despliegue va a dejar de ser exclusivamente esta máquina con Docker local — en una red real entre dos equipos, un fallo transitorio (DB aún arrancando, blip de red) ya no es un escenario hipotético. Implementación mínima: 3 intentos, 1 segundo de espera fija entre cada uno (`CONNECT_RETRIES`, `CONNECT_RETRY_DELAY_SECONDS`), sin librería nueva (`time.sleep` de stdlib). Se aplica solo a la conexión inicial (`__init__`) — los métodos de guardado/lectura individuales siguen siendo best-effort (retornan `False`/`None` en fallo), sin retry, porque ya son operaciones idempotentes desde la perspectiva del caller y añadir retry ahí sería sobreingeniería para un problema no observado en esa capa.
+- **`psycopg2.connect(..., connect_timeout=5)`** añadido en `postgres_adapter.py`. Descubierto durante la verificación manual del retry: sin timeout explícito, un intento de conexión contra un host/puerto inalcanzable podía colgarse indefinidamente en Windows (varios minutos, no segundos), lo cual habría hecho que el retry con backoff fuera contraproducente — 3 intentos × "indefinido" es peor que 1 intento sin retry. `MongoDBAdapter` ya tenía timeout explícito (`serverSelectionTimeoutMS=5000`) desde antes, por eso el problema solo se manifestó en Postgres. Verificado con un puerto cerrado real: sin el fix, el proceso quedó colgado (tuvo que terminarse manualmente); con el fix, falla en un tiempo acotado.
+
+### 🔧 Rechazo revisado
+
+- **Retry/backoff exponencial en los adapters de persistencia:** la entrada original de `0.3.0` en la sección "Rechazado / Descartado" decía "no hay evidencia de fallos de conexión intermitentes en este entorno (Docker local)". Esa premisa deja de aplicar: el usuario confirmó que el despliegue futuro puede ocurrir en una máquina distinta a la actual, escenario donde un fallo transitorio de red ya no es hipotético. Se implementa con el alcance mínimo suficiente (backoff fijo, no exponencial; solo en la conexión inicial, no en cada operación) — no se reabre la puerta a la resiliencia completa que se rechazó (colas, circuit breakers, etc.), que sigue sin justificación real.
+
+---
+
 ## Rechazado / Descartado
 
 Decisiones evaluadas y descartadas explícitamente para mantener el alcance YAGNI/KISS:
 
 - **Cola de mensajería (Redis/RabbitMQ) para `/solve` asíncrono:** el endpoint resuelve instancias en el request-response síncrono actual. No hay volumen ni tiempos de resolución que justifiquen una cola; agregar un broker sería infraestructura sin problema real que resolver en este alcance.
 - **ORM (SQLAlchemy/Tortoise) para el adapter de PostgreSQL:** el adapter usa SQL parametrizado directo (`psycopg`/`psycopg2` + placeholders). El esquema es de 3 tablas fijas sin migraciones dinámicas; un ORM añadiría una capa de abstracción sin beneficio medible sobre queries ya simples y explícitas.
-- **Retry/backoff exponencial en los adapters de persistencia:** documentado como pendiente en el estado de Fase 3, pero no implementado ahora — no hay evidencia de fallos de conexión intermitentes en este entorno (Docker local); añadir resiliencia para un fallo no observado es sobreingeniería prematura.
 - **Framework de mocking pesado para tests de persistencia (`unittest.mock`, fixtures de DB en memoria):** se optó por correr los tests de integración contra contenedores Docker reales de PostgreSQL/MongoDB. Mockear la capa de persistencia habría ocultado bugs reales (de hecho, así se detectó el problema de `psycopg2`/Python 3.14 y el bug de orden de importación en los tests).
 - **Validador de schema de configuración (pydantic-settings) para prevenir desalineación de `.env.example`:** el problema real (`0.3.1`) se resolvió corrigiendo el archivo de texto plano para que coincida con `config.py`. Introducir una capa de validación nueva para 10 variables de entorno es infraestructura sin problema proporcional que resolver.
 - **Cambiar `Node::demand` de `int` a `double` en el core C++ (`0.3.1`):** se evaluó junto con el fix de truncamiento de demanda, pero se descartó unilateralmente decidir el tipo de negocio sin confirmación — el usuario confirmó que las demandas son enteras (unidades discretas de carga), así que la validación se agregó en el dominio Python (`Cliente.__post_init__`) en vez de tocar el core C++ ya aprobado.
-- **Corregir `coordinates: List[tuple]` (defecto de tipado preexistente, hermano del fix aplicado a `depot_coordinates` en `0.3.2`):** fuera del delta auditado; toca un contrato de API ya en uso (`POST /solve`), no un campo nuevo como `depot_coordinates`. Se deja para una decisión aparte si se quiere endurecer.
 - **Añadir soporte de credenciales de MongoDB a `config.py`/`MongoDBAdapter` (`0.3.2`):** evaluado junto con la desalineación `docker-compose.yml` vs. código real; el usuario confirmó que Mongo corre sin autenticación en desarrollo local (uso ya verificado en esta sesión), así que se alineó `docker-compose.yml` a esa realidad en vez de añadir código de auth no ejercitado hoy.
 
 ---

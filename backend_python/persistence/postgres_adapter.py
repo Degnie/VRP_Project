@@ -5,7 +5,9 @@ Conecta a PostgreSQL usando psycopg2 con connection pooling.
 """
 
 from typing import List, Optional
+import logging
 import os
+import time
 from backend_python.models import Instancia, Cliente, Coordinate, Deposito, Flota
 
 try:
@@ -19,6 +21,11 @@ except ImportError:
         HAS_PSYCOPG2 = True
     except ImportError:
         HAS_PSYCOPG2 = False
+
+logger = logging.getLogger(__name__)
+
+CONNECT_RETRIES = 3
+CONNECT_RETRY_DELAY_SECONDS = 1
 
 
 class PostgreSQLAdapter:
@@ -46,11 +53,20 @@ class PostgreSQLAdapter:
         self.conn = None
 
         if HAS_PSYCOPG2:
-            try:
-                self.conn = psycopg2.connect(connection_string)
-                self._init_schema()
-            except psycopg2.Error as e:
-                raise ConnectionError(f"PostgreSQL connection failed: {e}")
+            last_error = None
+            for attempt in range(1, CONNECT_RETRIES + 1):
+                try:
+                    self.conn = psycopg2.connect(connection_string, connect_timeout=5)
+                    self._init_schema()
+                    return
+                except psycopg2.Error as e:
+                    last_error = e
+                    logger.warning(
+                        f"PostgreSQL connection attempt {attempt}/{CONNECT_RETRIES} failed: {e}"
+                    )
+                    if attempt < CONNECT_RETRIES:
+                        time.sleep(CONNECT_RETRY_DELAY_SECONDS)
+            raise ConnectionError(f"PostgreSQL connection failed after {CONNECT_RETRIES} attempts: {last_error}")
 
     def _init_schema(self):
         """Create tables if they don't exist."""
