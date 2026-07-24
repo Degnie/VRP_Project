@@ -129,7 +129,8 @@ class TestSolverPipeline:
     def test_orchestrator_fallback_returns_valid_solution(self, medium_instance):
         """Pipeline fallback (Python) retorna Solucion válida."""
         orchestrator = SolverOrchestrator(medium_instance)
-        solution = orchestrator._solve_python_fallback()
+        cost_lookup = orchestrator._build_cost_lookup()
+        solution = orchestrator._solve_python_fallback(cost_lookup)
 
         assert isinstance(solution, Solucion)
         assert solution.costo_total > 0
@@ -138,11 +139,42 @@ class TestSolverPipeline:
     def test_pipeline_logs_progression(self, medium_instance):
         """Pipeline debe registrar pasos de optimización."""
         orchestrator = SolverOrchestrator(medium_instance)
-        solution = orchestrator._solve_python_fallback()
+        cost_lookup = orchestrator._build_cost_lookup()
+        solution = orchestrator._solve_python_fallback(cost_lookup)
 
         # Log should be populated if using C++ (skipped here)
         # For Python fallback, log might be empty
         assert isinstance(orchestrator.log, list)
+
+
+class TestCostMatrixFallback:
+    """Tests para el fallback OSRM -> euclídea en _build_cost_lookup."""
+
+    def test_falls_back_to_euclidean_when_osrm_unreachable(self, medium_instance, monkeypatch):
+        """Si OSRM_URL apunta a un servicio inalcanzable, solve() no debe fallar:
+        debe caer silenciosamente a distancia euclídea."""
+        from backend_python.config import config as global_config
+
+        monkeypatch.setattr(global_config, "OSRM_URL", "http://localhost:59999")
+        monkeypatch.setattr(global_config, "OSRM_TIMEOUT_SECONDS", 1)
+
+        orchestrator = SolverOrchestrator(medium_instance)
+        cost_lookup = orchestrator._build_cost_lookup()
+
+        assert "Cost matrix: euclidiana (OSRM no disponible)" in orchestrator.log
+        assert len(cost_lookup) > 0
+
+    def test_uses_euclidean_when_osrm_not_configured(self, medium_instance, monkeypatch):
+        """Sin OSRM_URL configurado, ni siquiera debe intentar la llamada HTTP."""
+        from backend_python.config import config as global_config
+
+        monkeypatch.setattr(global_config, "OSRM_URL", "")
+
+        orchestrator = SolverOrchestrator(medium_instance)
+        cost_lookup = orchestrator._build_cost_lookup()
+
+        assert "Cost matrix: euclidiana (OSRM_URL no configurado)" in orchestrator.log
+        assert len(cost_lookup) > 0
 
 
 class TestFleetSizeValidation:
@@ -176,7 +208,8 @@ class TestOptimizationQuality:
     def test_python_fallback_produces_feasible_solution(self, medium_instance):
         """Pipeline Python fallback siempre produce solución factible."""
         orchestrator = SolverOrchestrator(medium_instance)
-        solution = orchestrator._solve_python_fallback()
+        cost_lookup = orchestrator._build_cost_lookup()
+        solution = orchestrator._solve_python_fallback(cost_lookup)
 
         # Feasibility checks
         all_visited = set()

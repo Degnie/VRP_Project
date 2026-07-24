@@ -1,4 +1,4 @@
-.PHONY: help build test run clean install-deps
+.PHONY: help build test run clean install-deps osrm-prepare
 
 help:
 	@echo "VRP Solver - Build Targets"
@@ -10,6 +10,7 @@ help:
 	@echo "  make run             Start FastAPI server (http://localhost:8000)"
 	@echo "  make clean           Remove build artifacts"
 	@echo "  make format          Format code (black, clang-format)"
+	@echo "  make osrm-prepare    Download + pre-process Lima OSM map for OSRM (run once, offline)"
 
 install-deps:
 	python -m pip install -r requirements.txt
@@ -43,3 +44,11 @@ format:
 	black backend_python/ tests/
 	find core_cpp -name "*.cpp" -o -name "*.hpp" | xargs clang-format -i
 	@echo "✓ Format complete"
+
+osrm-prepare:
+	mkdir -p data/osrm
+	curl -L -o data/osrm/lima-latest.osm.pbf https://download.geofabrik.de/south-america/peru-latest.osm.pbf
+	docker run --rm -v "$$(pwd)/data/osrm:/data" osrm/osrm-backend osrm-extract -p /opt/car.lua /data/lima-latest.osm.pbf
+	docker run --rm -v "$$(pwd)/data/osrm:/data" osrm/osrm-backend osrm-partition /data/lima-latest.osrm
+	docker run --rm -v "$$(pwd)/data/osrm:/data" osrm/osrm-backend osrm-customize /data/lima-latest.osrm
+	@echo "✓ OSRM map ready — start with: docker-compose up -d osrm"

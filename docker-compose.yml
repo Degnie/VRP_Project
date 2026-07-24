@@ -29,6 +29,16 @@ services:
       timeout: 5s
       retries: 5
 
+  # OSRM: requiere el mapa pre-procesado en ./data/osrm (ver `make osrm-prepare`).
+  # No se levanta con `docker-compose up` si ese paso no se corrió antes.
+  osrm:
+    image: osrm/osrm-backend
+    command: osrm-routed --algorithm mld /data/lima-latest.osrm
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./data/osrm:/data
+
 volumes:
   postgres_data:
   mongo_data:

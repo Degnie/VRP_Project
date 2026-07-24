@@ -262,12 +262,12 @@ class CostMatrix:
 
 ## Implementación Futura (Roadmap)
 
-- [ ] Integración OSRM para matrices reales
+- [x] Integración OSRM para matrices reales — implementado en `0.4.0` (ver [CHANGELOG.md](../../CHANGELOG.md)). `SolverOrchestrator` construye la matriz vía `osrm_client.get_osrm_matrix()`, con chunking para instancias grandes y fallback silencioso a euclídea si OSRM no está configurado o no responde. Mapa inicial: extracto de Perú (Geofabrik).
 - [ ] Soporte Valhalla (también asimétrico)
 - [ ] Caché de costsMemoización para queries frecuentes
 - [ ] Análisis: qué % de instancias reales son asimétricas
 
 ---
 
-**Versión:** 1.0  
+**Versión:** 1.1  
 **Última actualización:** 2026-07-23

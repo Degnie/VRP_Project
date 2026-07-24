@@ -3,7 +3,8 @@ Orquestador: integra C++ core con validación Python.
 Ejecuta secuencia: construcción → optimización → validación.
 """
 
-from typing import List, Tuple
+from typing import Dict, List, Tuple
+import logging
 import sys
 import os
 
@@ -12,6 +13,8 @@ from backend_python.models import (
     Coordinate, Cliente, Deposito, Flota, Instancia,
     Ruta, Solucion, distancia_euclidiana
 )
+from backend_python.config import get_config
+from backend_python.service.osrm_client import get_osrm_matrix, OSRMError
 
 # Importar vrp_solver (C++ bindings) - se carga en tiempo de ejecución
 try:
@@ -19,6 +22,8 @@ try:
     HAS_CPP_BINDINGS = True
 except ImportError:
     HAS_CPP_BINDINGS = False
+
+logger = logging.getLogger(__name__)
 
 
 class SolverOrchestrator:
@@ -34,16 +39,23 @@ class SolverOrchestrator:
         Resolver instancia completa: NN → SA → 3-opt + validación.
 
         Pipeline:
-        1. Nearest Neighbor (construcción)
-        2. Simulated Annealing (optimización)
-        3. 3-opt Polish (refinamiento)
+        1. Construir matriz de costos (OSRM si disponible, si no euclídea)
+        2. Nearest Neighbor (construcción)
+        3. Simulated Annealing (optimización)
+        4. 3-opt Polish (refinamiento)
+
+        La matriz de costos se construye una sola vez, antes de decidir
+        el camino de resolución (fallback Python o pipeline C++), para que
+        ambos caminos usen exactamente la misma fuente de distancias.
 
         Retorna: Solucion válida y optimizada
         """
+        cost_lookup = self._build_cost_lookup()
+
         if not HAS_CPP_BINDINGS:
-            solution = self._solve_python_fallback()
+            solution = self._solve_python_fallback(cost_lookup)
         else:
-            solution = self._solve_cpp_pipeline()
+            solution = self._solve_cpp_pipeline(cost_lookup)
 
         if len(solution.rutas) > self.instance.flota.num_vehiculos:
             raise ValueError(
@@ -52,7 +64,50 @@ class SolverOrchestrator:
 
         return solution
 
-    def _solve_python_fallback(self) -> Solucion:
+    def _build_cost_lookup(self) -> Dict[Tuple[int, int], float]:
+        """
+        Construye la matriz de costos como dict {(from_id, to_id): distancia}.
+
+        Intenta OSRM primero (distancias reales sobre calles); si falla o no
+        está configurado, cae silenciosamente a distancia euclídea — nunca
+        bloquea la resolución de la instancia.
+
+        IDs: 0 = depósito, 1..N = clientes (mismo esquema que el pipeline C++).
+        """
+        node_ids = [0] + [c.id for c in self.instance.clientes]
+        coords = [
+            (self.instance.deposito.coordenada.x, self.instance.deposito.coordenada.y)
+        ] + [(c.coordenada.x, c.coordenada.y) for c in self.instance.clientes]
+
+        config = get_config()
+        if config.OSRM_URL:
+            try:
+                matrix = get_osrm_matrix(
+                    coords,
+                    base_url=config.OSRM_URL,
+                    max_table_size=config.OSRM_MAX_TABLE_SIZE,
+                    timeout_seconds=config.OSRM_TIMEOUT_SECONDS,
+                )
+                self.log.append("Cost matrix: OSRM (calles reales)")
+                return {
+                    (node_ids[i], node_ids[j]): matrix[i][j]
+                    for i in range(len(node_ids))
+                    for j in range(len(node_ids))
+                }
+            except OSRMError as e:
+                logger.warning(f"OSRM unavailable, falling back to euclidean distance: {e}")
+                self.log.append("Cost matrix: euclidiana (OSRM no disponible)")
+        else:
+            self.log.append("Cost matrix: euclidiana (OSRM_URL no configurado)")
+
+        all_coords = [Coordinate(x, y) for x, y in coords]
+        return {
+            (node_ids[i], node_ids[j]): distancia_euclidiana(all_coords[i], all_coords[j])
+            for i in range(len(node_ids))
+            for j in range(len(node_ids))
+        }
+
+    def _solve_python_fallback(self, cost_lookup: Dict[Tuple[int, int], float]) -> Solucion:
         """
         Fallback: Nearest Neighbor puro en Python (sin C++).
         Útil para testing sin compilación.
@@ -62,7 +117,7 @@ class SolverOrchestrator:
         vehicle_id = 0
 
         while len(visited) < len(self.instance.clientes):
-            ruta = self._construct_route_greedy(visited, vehicle_id)
+            ruta = self._construct_route_greedy(visited, vehicle_id, cost_lookup)
             if not ruta.secuencia:
                 break
             rutas.append(ruta)
@@ -78,12 +133,13 @@ class SolverOrchestrator:
             costo_total=sum(r.costo for r in rutas)
         )
 
-    def _construct_route_greedy(self, visited: set, vehicle_id: int) -> Ruta:
+    def _construct_route_greedy(
+        self, visited: set, vehicle_id: int, cost_lookup: Dict[Tuple[int, int], float]
+    ) -> Ruta:
         """Construct one route greedily (Nearest Neighbor)."""
-        depot = self.instance.deposito
         secuencia = []
         costo = 0.0
-        current_pos = depot.coordenada
+        current_id = 0  # depot
         load = 0.0
 
         for _ in range(len(self.instance.clientes)):
@@ -94,7 +150,7 @@ class SolverOrchestrator:
                 if client.id not in visited:
                     new_load = load + client.demanda
                     if new_load <= self.instance.flota.capacidad_por_vehiculo:
-                        dist = distancia_euclidiana(current_pos, client.coordenada)
+                        dist = cost_lookup[(current_id, client.id)]
                         if dist < best_dist:
                             best_dist = dist
                             best_client = client
@@ -105,12 +161,12 @@ class SolverOrchestrator:
             secuencia.append(best_client.id)
             load += best_client.demanda
             costo += best_dist
-            current_pos = best_client.coordenada
+            current_id = best_client.id
             visited.add(best_client.id)
 
         # Close route
         if secuencia:
-            costo += distancia_euclidiana(current_pos, depot.coordenada)
+            costo += cost_lookup[(current_id, 0)]  # back to depot
             return Ruta(
                 vehicle_id=vehicle_id,
                 secuencia=secuencia,
@@ -119,19 +175,21 @@ class SolverOrchestrator:
 
         return Ruta(vehicle_id=vehicle_id, secuencia=[], costo=0.0)
 
-    def _solve_cpp_pipeline(self) -> Solucion:
+    def _solve_cpp_pipeline(self, cost_lookup: Dict[Tuple[int, int], float]) -> Solucion:
         """
         Resolver vía C++ bindings con pipeline completo: NN → SA → 3-opt.
 
         Pasos:
-        1. Build Graph + CostMatrix (C++)
+        1. Build Graph + CostMatrix (C++), llenada con cost_lookup (OSRM o euclídea)
         2. Nearest Neighbor (construcción)
         3. Simulated Annealing (optimización con SA)
         4. 3-opt Polish (refinamiento)
         5. Convert Solution → Python Solucion
         """
+        n_nodes = 1 + len(self.instance.clientes)
+
         # 1. Build C++ graph (1 nodo depósito + N clientes; NO num_vehiculos)
-        graph = vrp_solver.Graph(1 + len(self.instance.clientes))
+        graph = vrp_solver.Graph(n_nodes)
 
         # Add depot (id=0)
         graph.add_node(0, self.instance.deposito.coordenada.x,
@@ -142,14 +200,13 @@ class SolverOrchestrator:
             graph.add_node(client.id, client.coordenada.x,
                           client.coordenada.y, int(client.demanda))
 
-        # 2. Build cost matrix (Euclidean for now)
-        coords = [
-            (self.instance.deposito.coordenada.x, self.instance.deposito.coordenada.y)
-        ]
-        for client in self.instance.clientes:
-            coords.append((client.coordenada.x, client.coordenada.y))
-
-        cost_matrix = vrp_solver.CostMatrix.from_euclidean(coords)
+        # 2. Build cost matrix from cost_lookup (OSRM o euclídea, ya resuelto en solve())
+        node_ids = [0] + [c.id for c in self.instance.clientes]
+        cost_matrix = vrp_solver.CostMatrix(n_nodes)
+        for i, from_id in enumerate(node_ids):
+            for j, to_id in enumerate(node_ids):
+                if i != j:
+                    cost_matrix.set_cost(i, j, cost_lookup[(from_id, to_id)])
 
         # 3. Nearest Neighbor (construcción inicial)
         self.log.append("Step 1: Nearest Neighbor construction")

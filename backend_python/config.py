@@ -53,6 +53,12 @@ class Config:
     # Solver
     SOLVER_TIMEOUT_SECONDS = int(os.getenv("SOLVER_TIMEOUT_SECONDS", "30"))
 
+    # OSRM (routing sobre calles reales; fallback a euclídea si no configurado o no disponible)
+    # Sin default: OSRM_URL vacío significa "no usar OSRM", no "falla en runtime".
+    OSRM_URL = os.getenv("OSRM_URL", "")
+    OSRM_MAX_TABLE_SIZE = int(os.getenv("OSRM_MAX_TABLE_SIZE", "100"))
+    OSRM_TIMEOUT_SECONDS = int(os.getenv("OSRM_TIMEOUT_SECONDS", "5"))
+
 
 # Singleton instance
 config = Config()

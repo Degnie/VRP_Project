@@ -45,6 +45,7 @@ build/
 
 # Data/Benchmarks
 data/large_instances/
+data/osrm/
 benchmarks/results/
 
 # Docs build

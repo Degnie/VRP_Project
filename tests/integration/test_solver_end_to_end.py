@@ -37,7 +37,8 @@ class TestSolverOrchestrator:
     def test_orchestrator_python_fallback(self, simple_instance):
         """Resolver con fallback Python puro (sin C++)."""
         orchestrator = SolverOrchestrator(simple_instance)
-        solution = orchestrator._solve_python_fallback()
+        cost_lookup = orchestrator._build_cost_lookup()
+        solution = orchestrator._solve_python_fallback(cost_lookup)
 
         assert solution.instancia_id == "test_simple"
         assert len(solution.rutas) > 0

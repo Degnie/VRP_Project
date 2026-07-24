@@ -238,10 +238,46 @@ Transición de arquitectura monolítica Qt/C++17 a híbrida Python/C++ para esca
 
 ---
 
+## [0.4.0] — 2026-07-23
+
+### ✨ Added
+
+- **Integración OSRM real para distancias sobre calles** (`backend_python/service/osrm_client.py`, `solver_orchestrator.py`). `SolverOrchestrator.solve()` ahora construye la matriz de costos una sola vez, antes de bifurcar entre el fallback Python y el pipeline C++ (`_build_cost_lookup()`), garantizando que ambos caminos usen exactamente la misma fuente de distancias — requisito ya exigido por `TESTING_STRATEGY.md` sección 2 (paridad entre caminos). El comentario `"Build cost matrix (Euclidean for now)"` que existía en `_solve_cpp_pipeline` desde Fase 2 queda resuelto: ahora usa OSRM cuando está configurado.
+- **Cliente OSRM con chunking** (`osrm_client.py::get_osrm_matrix`): pide la matriz vía el endpoint `/table` de OSRM; si el número de coordenadas excede `OSRM_MAX_TABLE_SIZE`, particiona en múltiples llamadas por bloques y ensambla la matriz completa en Python. Diseñado con chunking desde el inicio (decisión confirmada por el usuario) para no chocar con el límite práctico de tamaño de matriz de OSRM frente a la promesa de escala del README ("50 a 100k+ clientes").
+- **Fallback silencioso a distancia euclídea** si OSRM no está configurado (`OSRM_URL` vacío) o no responde (timeout, error HTTP, código de error de OSRM) — decisión de producto confirmada por el usuario: nunca falla `/solve` completo por una caída de OSRM, se loggea `warning` y se continúa con el cálculo euclidiano ya existente. Verificado con dos casos: `OSRM_URL` no configurado (salta la llamada HTTP por completo, sin latencia) y `OSRM_URL` apuntando a un puerto inalcanzable (falla rápido por el timeout, cae a euclídea).
+- **`docker-compose.yml`:** nuevo servicio `osrm` (imagen oficial `osrm/osrm-backend`), apuntando a un mapa pre-procesado en `./data/osrm` (gitignored, mismo patrón que `data/large_instances/`). No se levanta automáticamente con `docker-compose up` si el mapa no fue preparado antes — requiere el paso offline `make osrm-prepare`.
+- **`make osrm-prepare`** (nuevo target en `Makefile`): descarga el extracto de Perú desde Geofabrik (Lima Metropolitana no está disponible como extracto separado en Geofabrik; se usa el archivo de Perú completo, ~250MB) y lo pre-procesa (`osrm-extract` + `osrm-partition` + `osrm-customize`) — paso único, offline, análogo a `make build` para el core C++.
+- **Config nueva** (`config.py`, `.env.example`): `OSRM_URL` (sin default — vacío significa "no usar OSRM", evita que el sistema intente conectar a un servicio que nadie levantó), `OSRM_MAX_TABLE_SIZE`, `OSRM_TIMEOUT_SECONDS`.
+
+### 🐛 Fixed durante la implementación
+
+- **`OSRM_URL` con default `http://localhost:5000` causaba que toda la suite de tests intentara conectar a OSRM y esperara el timeout completo (~4s por test) antes de caer al fallback**, incluso en máquinas sin OSRM levantado — la suite pasó de ~2s a ~51s. Corregido quitando el default: `OSRM_URL` vacío ahora salta la llamada HTTP por completo en vez de intentarla y fallar. Mismo principio que ya aplica `DATABASE_URL`/`MONGO_URL` (sin valor mágico que aparente estar configurado sin estarlo).
+
+### Tests
+
+- `tests/unit/test_osrm_client.py`: matriz simple y chunking contra un servicio OSRM real (`skipif` si `OSRM_URL` no está configurado, mismo patrón que `test_persistence.py` para Postgres/Mongo); propagación de `OSRMError` ante host inalcanzable (no requiere OSRM real, corre siempre).
+- `tests/unit/test_optimizers.py::TestCostMatrixFallback`: fallback a euclídea cuando OSRM no está configurado y cuando está configurado pero inalcanzable (vía `monkeypatch` sobre el `config` singleton).
+- Tests existentes de `_solve_python_fallback` (`test_optimizers.py`, `test_solver_end_to_end.py`) actualizados para pasar `cost_lookup` explícito, ya que la firma del método cambió al extraer la construcción de la matriz a un punto único.
+
+---
+
+## [0.4.1] — 2026-07-23
+
+### 🐛 Fixed
+
+- **`osrm_client.py::get_osrm_matrix` — el chunking podía exceder `max_table_size` en cada request individual, invalidando su propio propósito.** Cada bloque combinaba un rango de fila + un rango de columna (`block_coords = coords[row_start:row_end] + coords[col_start:col_end]`) usando `max_table_size` como tamaño de cada rango por separado — el tamaño combinado real podía llegar a `2 * max_table_size` (verificado con simulación: `max_table_size=2` generaba requests de hasta 4 coordenadas). Si `OSRM_MAX_TABLE_SIZE` se configura porque el servidor OSRM real rechaza requests más grandes, el chunking seguía enviando requests demasiado grandes, solo que con menor frecuencia. Fix: el tamaño de cada bloque ahora es `max_table_size // 2`, garantizando que la unión fila+columna nunca exceda el límite configurado (verificado: peor caso combinado = exactamente `max_table_size`).
+- **README.md no documentaba la integración OSRM (`0.4.0`) como implementada.** Seguía describiéndola como roadmap ("OSRM/Valhalla-ready") sin mencionar que ya existe, y el Quick Start no incluía el paso `make osrm-prepare`. Corregido: sección "Motor Evaluador de Costos" actualizada, nueva sección "OSRM (opcional)" en Quick Start.
+- **`osrm_client.py` sin advertencia sobre el requisito de coordenadas geográficas reales.** Activar `OSRM_URL` contra una instancia con coordenadas cartesianas/sintéticas (como las que usa toda la suite de tests y el demo) podría, en el peor caso, devolver una matriz "válida" pero sin sentido si esos valores caen dentro de un rango lon/lat plausible por coincidencia — sin ningún error que lo señale. Se documentó explícitamente en el docstring del módulo; no se añadió validación de rango en código (decisión de configuración del usuario, no un caso a adivinar en runtime — ver "Rechazado / Descartado").
+
+---
+
 ## Rechazado / Descartado
 
 Decisiones evaluadas y descartadas explícitamente para mantener el alcance YAGNI/KISS:
 
+- **Validación automática de rango geográfico (lon/lat) en `osrm_client.py` (`0.4.1`):** se documentó el requisito en el docstring en vez de validarlo en código. Activar OSRM con coordenadas no geográficas es un error de configuración del usuario, no un caso de datos que el sistema deba detectar/adivinar en runtime — añadir esa validación sería sobreingeniería para un mal uso ya evitable con documentación clara.
+- **Cobertura geográfica más allá de Lima Metropolitana / Perú en esta iteración:** se usa el extracto de Perú completo de Geofabrik (no hay uno más granular disponible ahí). Ampliar a otras regiones/países queda como decisión futura si se necesita — no se descarga ni pre-procesa nada más amplio especulativamente.
+- **Orquestador de infraestructura (Terraform/Ansible) para el paso de preparación del mapa OSRM:** un target de `Makefile` (`osrm-prepare`) es suficiente para un paso de un solo comando, ejecutado una vez por entorno — introducir una herramienta de IaC para esto sería infraestructura desproporcionada al problema.
 - **Cola de mensajería (Redis/RabbitMQ) para `/solve` asíncrono:** el endpoint resuelve instancias en el request-response síncrono actual. No hay volumen ni tiempos de resolución que justifiquen una cola; agregar un broker sería infraestructura sin problema real que resolver en este alcance.
 - **ORM (SQLAlchemy/Tortoise) para el adapter de PostgreSQL:** el adapter usa SQL parametrizado directo (`psycopg`/`psycopg2` + placeholders). El esquema es de 3 tablas fijas sin migraciones dinámicas; un ORM añadiría una capa de abstracción sin beneficio medible sobre queries ya simples y explícitas.
 - **Framework de mocking pesado para tests de persistencia (`unittest.mock`, fixtures de DB en memoria):** se optó por correr los tests de integración contra contenedores Docker reales de PostgreSQL/MongoDB. Mockear la capa de persistencia habría ocultado bugs reales (de hecho, así se detectó el problema de `psycopg2`/Python 3.14 y el bug de orden de importación en los tests).

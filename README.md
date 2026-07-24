@@ -100,7 +100,7 @@ vrp_project/
 ### Motor Evaluador de Costos
 - Matrices de adyacencia **dirigidas** (no asume simetría euclidiana)
 - Cálculo en C++ con pybind11 binding (zero-copy numpy arrays)
-- Soporte para: distancias euclidiana, Manhattan, custom (OSRM/Valhalla-ready)
+- Distancia euclidiana por defecto; **integración OSRM implementada** para distancias reales sobre calles (`OSRM_URL` en `.env.local`, ver Quick Start) — fallback automático a euclídea si OSRM no está configurado o no responde. Requiere coordenadas geográficas reales (lon, lat); Valhalla queda como alternativa futura, no implementada.
 
 ### Operador de Pulido Final
 - 3-opt LKH-inspired para refinamiento intra-ruta post-optimización
@@ -148,6 +148,16 @@ docker-compose up -d
 # PostgreSQL + MongoDB listos en localhost
 make build && make test
 ```
+
+### OSRM (opcional — distancias reales sobre calles)
+
+```bash
+make osrm-prepare   # descarga + pre-procesa el mapa (una sola vez, offline, ~250MB)
+docker-compose up -d osrm
+# Configurar OSRM_URL=http://localhost:5000 en .env.local
+```
+
+Sin este paso, el solver usa distancia euclídea automáticamente (comportamiento por defecto, sin configuración adicional).
 
 ---
 
