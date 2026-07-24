@@ -271,11 +271,64 @@ Transición de arquitectura monolítica Qt/C++17 a híbrida Python/C++ para esca
 
 ---
 
+## [0.4.2] — 2026-07-23
+
+### ✨ Added
+
+- **Bindings C++ (`vrp_solver`) compilados y activados por primera vez.** Bloqueo histórico resuelto: el MinGW instalado en esta máquina (`C:\MinGW`, GCC 6.3.0) era un toolchain de **32-bit**, incompatible con el Python de 64-bit del sistema — CMake lo rechazaba con `"Wrong architecture for the interpreter"`. Instalado MinGW-w64 real de 64-bit (WinLibs, GCC 16.1.0, vía `winget install BrechtSanders.WinLibs.POSIX.UCRT`) y reconfigurado el build apuntando explícitamente a ese compilador (`CMAKE_C_COMPILER`/`CMAKE_CXX_COMPILER`) y a `pybind11_DIR` (`python -c "import pybind11; print(pybind11.get_cmake_dir())"`). El `.pyd` compila y enlaza correctamente (`vrp_solver.cp314-win_amd64.pyd`).
+- **`MINGW_BIN_DIR` (nueva variable de entorno, opcional, solo Windows).** Descubierto que Python 3.8+ en Windows no resuelve las DLLs de runtime de un `.pyd` compilado con MinGW (`libgcc_s_seh-1.dll`, `libstdc++-6.dll`, `libwinpthread-1.dll`) vía `PATH` del proceso — requiere `os.add_dll_directory()` explícito (cambio de seguridad de Python, no un bug de esta integración). `solver_orchestrator.py` ahora llama `os.add_dll_directory(MINGW_BIN_DIR)` antes de `import vrp_solver` si la variable está seteada y el directorio existe; si no, el import de `vrp_solver` falla como antes y el sistema usa el fallback Python automáticamente — mismo comportamiento "opcional, sin bloquear" que ya tienen `OSRM_URL`/`DATABASE_URL`.
+
+### 🐛 Fixed
+
+- **`solver_orchestrator.py::_solve_cpp_pipeline` — el depósito (`id=0`) se copiaba dentro de `Ruta.secuencia`, violando el invariante de unicidad de `Solucion`.** Bug real de Fase 2 (`b64092e`), invisible desde su origen porque el pipeline C++ nunca se había ejecutado hasta este parche (bindings no compilados). `cpp_route.sequence` (C++) incluye el depósito al inicio y fin de cada ruta (`depot → clientes → depot`, patrón estándar VRP), pero se copiaba tal cual a `Ruta.secuencia` (que en el dominio Python representa solo clientes) — con 2+ rutas, el depósito aparecía repetido entre ellas, y `Solucion.__post_init__` lo rechazaba como `"cliente visitado múltiples veces"`. Confirmado con el traceback real: `secuencia=[0, 1, 3, 2, 0]` para una ruta de 3 clientes. Fix: filtrar `node_id != 0` al convertir `cpp_route.sequence` a `Ruta.secuencia`. Verificado: 59/59 tests pasando con el pipeline C++ real activo (antes solo se ejercitaba el fallback Python), demo end-to-end con costo 145.78 (mejor que el fallback Python, 146.86 — el NN→SA→3-opt real optimiza más que el greedy simple, como se esperaba por diseño).
+
+### 📝 Notas de infraestructura (no código)
+
+- Instalación de MinGW-w64 (WinLibs) es específica de esta máquina, no versionada en git — `MINGW_BIN_DIR` vive en `.env.local`. Otro desarrollador en otra máquina necesitaría repetir la instalación (o usar MSVC/otro toolchain de 64-bit) para activar los bindings; sin hacerlo, el sistema sigue funcionando en fallback Python sin ningún cambio de comportamiento — este parche no introduce una dependencia dura.
+
+---
+
+## [0.4.3] — 2026-07-23
+
+### ✨ Added
+
+- **Validación de rango geográfico (lon/lat) en `osrm_client.py::get_osrm_matrix`.** Antes solo se advertía en el docstring; ahora `_validate_coords_are_geographic()` rechaza explícitamente cualquier coordenada fuera de `[-180, 180]` (lon) / `[-90, 90]` (lat) **antes** de hacer cualquier llamada HTTP, lanzando `OSRMError` (que activa el fallback silencioso a euclídea ya existente). No detecta coordenadas cartesianas que caigan dentro de un rango lon/lat plausible por coincidencia (limitación ya documentada, no resuelta por esta validación), pero sí el caso más común y peligroso: instancias sintéticas de prueba con valores muy fuera de rango. Test de regresión: `tests/unit/test_osrm_client.py::test_osrm_matrix_rejects_non_geographic_coordinates` (no requiere OSRM real, corre siempre).
+- **`Graph::add_node` (`core_cpp/include/graph.hpp`) ahora detecta colisión de IDs.** Se añadió un `std::vector<bool> assigned` para rastrear qué posiciones ya fueron asignadas — una segunda llamada con el mismo `id` lanza `std::invalid_argument` en vez de sobrescribir el nodo anterior en silencio (mapeado a `ValueError` en Python vía pybind11). Cierra el vector de bug que causó la colisión cliente/depósito de `0.3.1`. Verificado en dos niveles: test C++ nativo (`core_cpp/tests/test_graph.cpp::DuplicateIdRejected`, vía CTest) y llamada manual a través de los bindings compilados.
+
+### 🐛 Fixed
+
+- **`CMakeLists.txt` (raíz) y `core_cpp/CMakeLists.txt` hacían `add_subdirectory(core_cpp/tests)` dos veces — bug preexistente, nunca detectado porque nadie había compilado la suite C++ con `BUILD_TESTS=ON` hasta ahora.** CMake fallaba con `"binary directory is already used to build a source directory"`. Fix: el `add_subdirectory(tests)` vive solo en `core_cpp/CMakeLists.txt` (dueño natural de ese subdirectorio); el `CMakeLists.txt` raíz solo llama `enable_testing()`. Efecto secundario descubierto: `enable_testing()` debe ejecutarse **antes** de `add_subdirectory(core_cpp)` para que CTest registre los tests de ese subárbol — corregido el orden también. Resultado: primera compilación exitosa de la suite C++ nativa completa (GoogleTest vía `FetchContent`), **10/10 tests pasando** (`vrp_core_tests.exe`), incluyendo el nuevo test de colisión de IDs.
+
+### 🔬 Validación de escala real (chunking OSRM, deuda técnica de `0.4.0`/`0.4.1`)
+
+Se levantó un servicio OSRM real (`make osrm-prepare` con el extracto de Perú de Geofabrik, 242MB descarga → 2.5GB pre-procesado) y se probó `get_osrm_matrix` con coordenadas aleatorias reales dentro de Lima Metropolitana, en vez del caso sintético de 4 coordenadas que era la única cobertura hasta ahora:
+
+| n coordenadas | Tiempo | Requests HTTP (`max_table_size=100`) |
+|---|---|---|
+| 50 | 0.26s | 1 (sin chunking) |
+| 150 | 2.11s | 9 |
+| 300 | 7.72s | 36 |
+| 1000 | 85.01s | 400 |
+
+**Resultado: el chunking funciona correctamente (matriz completa y correcta en los 4 casos), pero el costo real a escala es alto** — 85 segundos para 1000 clientes, muy por encima de la promesa de "100-500ms" del README para instancias de ese tamaño (esa cifra asume distancia euclídea, no OSRM). Causa: el patrón O(bloques²) del chunking (400 requests secuenciales para n=1000, ~212ms promedio cada uno). Confirma numéricamente la deuda técnica ya documentada en `TESTING_STRATEGY.md`, ahora con datos reales en vez de una suposición. También se confirmó que el servidor OSRM real rechaza tablas de 1000 coordenadas en una sola llamada (`400 Bad Request` sin chunking) — validando que el chunking no es opcional para instancias medianas/grandes con OSRM activo, es un requisito funcional.
+
+**No se optimizó el chunking en este parche** (paralelizar requests, cachear resultados, etc.) — queda como decisión explícita para cuando el frontend/casos de uso reales confirmen que instancias de cientos de clientes con OSRM activo son un escenario a soportar en producción, no antes.
+
+---
+
+## [0.4.4] — 2026-07-24
+
+### 🐛 Fixed
+
+- **README.md "Prerequisites" indicaba C++20 (GCC 9+, Clang 11+); el proyecto usa C++17 desde hace varias fases.** `CMakeLists.txt` ya documentaba explícitamente el downgrade (`"C++17 standard (C++20 not available in all environments)"`) pero el README nunca se actualizó — un usuario nuevo podría instalar un toolchain pensando que necesita C++20. Corregido a "C++17 compiler (GCC 9+, Clang 11+, MinGW-w64 en Windows)", mencionando explícitamente MinGW-w64 como opción validada en `0.4.2`.
+- **El fix de CMake duplicado de `0.4.3` perdió `EXCLUDE_FROM_ALL`, causando que un build normal (`cmake --build .` / `make build`) compilara la suite de tests C++ completa (incluyendo GoogleTest vía `FetchContent`, que requiere descarga de internet) aunque el usuario no pidiera correr tests.** La versión original tenía `add_subdirectory(core_cpp/tests EXCLUDE_FROM_ALL)`; al mover ese `add_subdirectory` a `core_cpp/CMakeLists.txt` para resolver la duplicación, se perdió el flag. Confirmado con una reconfiguración limpia: sin el flag, `cmake --build .` con `BUILD_TESTS=ON` (default) compilaba gtest/gmock completo y `vrp_core_tests.exe` como parte del build normal. Fix: `add_subdirectory(tests EXCLUDE_FROM_ALL)` en `core_cpp/CMakeLists.txt` — el target de tests ahora solo se compila si se invoca explícitamente (`cmake --build . --target vrp_core_tests` o vía `ctest`, que lo requiere como dependencia). Efecto colateral corregido en el mismo parche: `Makefile::test-cpp` ahora compila `vrp_core_tests` explícitamente antes de `ctest` (antes asumía que `make build` ya lo había compilado, lo cual dejó de ser cierto con `EXCLUDE_FROM_ALL` restaurado). Verificado: build normal ya no compila tests (confirmado por ausencia de pasos de gtest en el log), `make test-cpp` sigue funcionando (10/10 tests C++ pasando).
+
+---
+
 ## Rechazado / Descartado
 
 Decisiones evaluadas y descartadas explícitamente para mantener el alcance YAGNI/KISS:
 
-- **Validación automática de rango geográfico (lon/lat) en `osrm_client.py` (`0.4.1`):** se documentó el requisito en el docstring en vez de validarlo en código. Activar OSRM con coordenadas no geográficas es un error de configuración del usuario, no un caso de datos que el sistema deba detectar/adivinar en runtime — añadir esa validación sería sobreingeniería para un mal uso ya evitable con documentación clara.
 - **Cobertura geográfica más allá de Lima Metropolitana / Perú en esta iteración:** se usa el extracto de Perú completo de Geofabrik (no hay uno más granular disponible ahí). Ampliar a otras regiones/países queda como decisión futura si se necesita — no se descarga ni pre-procesa nada más amplio especulativamente.
 - **Orquestador de infraestructura (Terraform/Ansible) para el paso de preparación del mapa OSRM:** un target de `Makefile` (`osrm-prepare`) es suficiente para un paso de un solo comando, ejecutado una vez por entorno — introducir una herramienta de IaC para esto sería infraestructura desproporcionada al problema.
 - **Cola de mensajería (Redis/RabbitMQ) para `/solve` asíncrono:** el endpoint resuelve instancias en el request-response síncrono actual. No hay volumen ni tiempos de resolución que justifiquen una cola; agregar un broker sería infraestructura sin problema real que resolver en este alcance.

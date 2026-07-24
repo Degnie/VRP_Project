@@ -5,10 +5,11 @@ Uso: get_osrm_matrix(coords, base_url, max_table_size, timeout_seconds) -> matri
 Lanza OSRMError si el servicio no responde o falla — el caller decide el fallback
 (ver SolverOrchestrator, que cae a distancia euclídea).
 
-IMPORTANTE: coords deben ser coordenadas geográficas reales (lon, lat). Activar
-OSRM_URL contra una instancia con coordenadas cartesianas/sintéticas (no geográficas)
-puede producir resultados sin sentido si esos valores caen dentro de un rango
-lon/lat válido por coincidencia — OSRM no tiene forma de detectar ese mal uso.
+IMPORTANTE: coords deben ser coordenadas geográficas reales (lon, lat).
+get_osrm_matrix valida que estén en rango lon/lat válido antes de llamar a OSRM
+(lanza OSRMError si no) — esto evita el caso más peligroso (coordenadas
+cartesianas fuera de rango), pero no puede detectar coordenadas cartesianas
+que caigan dentro de un rango lon/lat plausible por coincidencia.
 """
 
 from typing import List, Tuple
@@ -17,6 +18,21 @@ import requests
 
 class OSRMError(Exception):
     """OSRM no disponible, timeout, o respuesta inválida."""
+
+
+def _validate_coords_are_geographic(coords: List[Tuple[float, float]]) -> None:
+    """
+    Verifica que las coordenadas estén en rango lon/lat válido antes de llamar
+    a OSRM. Sin esto, coordenadas cartesianas/sintéticas que caigan dentro de
+    un rango lon/lat plausible por coincidencia producirían una matriz "válida"
+    pero sin ningún sentido, sin que OSRM pueda detectarlo por su cuenta.
+    """
+    for x, y in coords:
+        if not (-180.0 <= x <= 180.0) or not (-90.0 <= y <= 90.0):
+            raise OSRMError(
+                f"coordinate ({x}, {y}) is outside valid lon/lat range — "
+                "OSRM_URL requires real geographic coordinates, not cartesian/synthetic ones"
+            )
 
 
 def _table_request(coords: List[Tuple[float, float]], base_url: str, timeout_seconds: int) -> List[List[float]]:
@@ -62,8 +78,10 @@ def get_osrm_matrix(
         timeout_seconds: timeout HTTP por llamada
 
     Raises:
-        OSRMError: si cualquier llamada falla o el servicio no responde.
+        OSRMError: si cualquier llamada falla, el servicio no responde, o las
+                   coordenadas están fuera del rango lon/lat válido.
     """
+    _validate_coords_are_geographic(coords)
     n = len(coords)
 
     if n <= max_table_size:

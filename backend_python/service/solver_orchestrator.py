@@ -16,6 +16,16 @@ from backend_python.models import (
 from backend_python.config import get_config
 from backend_python.service.osrm_client import get_osrm_matrix, OSRMError
 
+# En Windows, las extensiones .pyd compiladas con MinGW no resuelven sus DLLs
+# de runtime (libgcc, libstdc++, libwinpthread) vía PATH desde Python 3.8+ —
+# requieren os.add_dll_directory() explícito. MINGW_BIN_DIR es opcional
+# (.env.local, no versionado, específico de cada máquina); sin ella, el
+# import de vrp_solver simplemente falla y el sistema usa el fallback Python.
+if sys.platform == "win32":
+    mingw_bin_dir = os.getenv("MINGW_BIN_DIR")
+    if mingw_bin_dir and os.path.isdir(mingw_bin_dir):
+        os.add_dll_directory(mingw_bin_dir)
+
 # Importar vrp_solver (C++ bindings) - se carga en tiempo de ejecución
 try:
     import vrp_solver
@@ -241,11 +251,14 @@ class SolverOrchestrator:
         self.log.append(f"  3-opt cost: {sa_solution.total_cost:.2f}")
 
         # 6. Convert C++ Solution → Python Solucion
+        # cpp_route.sequence incluye el depósito (id=0) al inicio y fin de cada
+        # ruta (depot -> clientes -> depot); Ruta.secuencia es solo clientes.
         rutas = []
         for cpp_route in sa_solution.routes:
+            secuencia = [node_id for node_id in cpp_route.sequence if node_id != 0]
             ruta = Ruta(
                 vehicle_id=cpp_route.vehicle_id,
-                secuencia=list(cpp_route.sequence),
+                secuencia=secuencia,
                 costo=cpp_route.cost
             )
             rutas.append(ruta)

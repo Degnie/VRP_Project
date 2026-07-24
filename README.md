@@ -117,8 +117,8 @@ vrp_project/
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Python 3.11+
-- C++20 compiler (GCC 9+, Clang 11+)
+- Python 3.11+ (64-bit)
+- C++17 compiler (GCC 9+, Clang 11+, MinGW-w64 en Windows)
 - CMake 3.20+
 - Docker (opcional, para dev env)
 

@@ -23,6 +23,19 @@ def test_osrm_matrix_raises_on_unreachable_host():
         )
 
 
+def test_osrm_matrix_rejects_non_geographic_coordinates():
+    """Coordenadas cartesianas/sintéticas fuera de rango lon/lat deben rechazarse
+    ANTES de intentar cualquier llamada HTTP (no requiere OSRM real ni red)."""
+    coords = [(0.0, 0.0), (10.0, 10.0), (500.0, 500.0)]  # 500 fuera de rango lon/lat
+    with pytest.raises(OSRMError, match="outside valid lon/lat range"):
+        get_osrm_matrix(
+            coords,
+            base_url="http://localhost:59999",  # nunca se llega a usar
+            max_table_size=100,
+            timeout_seconds=1,
+        )
+
+
 @pytest.mark.skipif(not OSRM_AVAILABLE, reason="OSRM not configured")
 class TestOSRMIntegration:
     """Tests contra un servicio OSRM real."""

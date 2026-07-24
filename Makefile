@@ -29,6 +29,7 @@ test-py:
 	pytest tests/ -v --tb=short --cov=backend_python
 
 test-cpp:
+	cd build && cmake --build . --target vrp_core_tests --config Release
 	cd build && ctest --output-on-failure
 
 run:

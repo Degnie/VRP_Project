@@ -24,3 +24,9 @@ TEST(GraphTest, InvalidDemand) {
     Graph g(5);
     EXPECT_THROW(g.add_node(0, 0.0, 0.0, -1), std::invalid_argument);
 }
+
+TEST(GraphTest, DuplicateIdRejected) {
+    Graph g(5);
+    g.add_node(0, 0.0, 0.0, 0);
+    EXPECT_THROW(g.add_node(0, 1.0, 1.0, 10), std::invalid_argument);
+}

@@ -27,9 +27,10 @@ class Graph {
 private:
     int n_nodes;
     std::vector<Node> nodes;
+    std::vector<bool> assigned;
 
 public:
-    explicit Graph(int n) : n_nodes(n), nodes(n) {}
+    explicit Graph(int n) : n_nodes(n), nodes(n), assigned(n, false) {}
 
     void add_node(int id, double x, double y, int demand = 0) {
         if (id < 0 || id >= n_nodes) {
@@ -38,7 +39,11 @@ public:
         if (demand < 0) {
             throw std::invalid_argument("Demand must be non-negative");
         }
+        if (assigned[id]) {
+            throw std::invalid_argument("Node ID already assigned (duplicate add_node call)");
+        }
         nodes[id] = {id, {x, y}, demand};
+        assigned[id] = true;
     }
 
     const Node& get_node(int id) const {

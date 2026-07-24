@@ -9,6 +9,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(BUILD_TESTS "Build C++ tests" ON)
 option(BUILD_PYTHON_BINDINGS "Build Python bindings" ON)
 
+# enable_testing() debe llamarse antes de add_subdirectory(core_cpp) para que
+# CTest registre los tests definidos en core_cpp/tests (add_test()).
+if(BUILD_TESTS)
+    enable_testing()
+endif()
+
 # Add core_cpp directory
 add_subdirectory(core_cpp)
 
@@ -33,12 +39,6 @@ if(BUILD_PYTHON_BINDINGS)
     else()
         message(STATUS "Python bindings: DISABLED (Python3 or pybind11 not found)")
     endif()
-endif()
-
-# Testing (if enabled)
-if(BUILD_TESTS)
-    enable_testing()
-    add_subdirectory(core_cpp/tests EXCLUDE_FROM_ALL)
 endif()
 
 # Print configuration

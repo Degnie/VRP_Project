@@ -21,7 +21,9 @@ else()
     target_compile_options(vrp_core PRIVATE -O3 -Wall -Wextra -pedantic)
 endif()
 
-# Tests
+# Tests — EXCLUDE_FROM_ALL evita que "cmake --build ." (target ALL) compile
+# gtest/gmock y el ejecutable de tests en un build normal; solo se compilan
+# con "ctest" o "cmake --build . --target vrp_core_tests" explícitos.
 if(BUILD_TESTS)
-    add_subdirectory(tests)
+    add_subdirectory(tests EXCLUDE_FROM_ALL)
 endif()
