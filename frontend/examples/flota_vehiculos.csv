@@ -1,0 +1,5 @@
+nombre,peso_kg,volumen_m3,margen
+Moto de reparto,30,0.15,0.9
+Auto,150,0.6,0.9
+Camioneta,600,3.5,0.9
+Camión pequeño,1500,9,0.85

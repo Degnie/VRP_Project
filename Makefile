@@ -1,4 +1,4 @@
-.PHONY: help build test run clean install-deps osrm-prepare
+.PHONY: help build test run clean install-deps osrm-prepare db-migrate db-migration
 
 help:
 	@echo "VRP Solver - Build Targets"
@@ -11,6 +11,8 @@ help:
 	@echo "  make clean           Remove build artifacts"
 	@echo "  make format          Format code (black, clang-format)"
 	@echo "  make osrm-prepare    Download + pre-process Lima OSM map for OSRM (run once, offline)"
+	@echo "  make db-migrate      Apply pending Alembic migrations (alembic upgrade head)"
+	@echo "  make db-migration msg=\"...\"   Create a new Alembic migration (autogenerate off, DDL manual)"
 
 install-deps:
 	python -m pip install -r requirements.txt
@@ -53,3 +55,11 @@ osrm-prepare:
 	docker run --rm -v "$$(pwd)/data/osrm:/data" osrm/osrm-backend osrm-partition /data/lima-latest.osrm
 	docker run --rm -v "$$(pwd)/data/osrm:/data" osrm/osrm-backend osrm-customize /data/lima-latest.osrm
 	@echo "✓ OSRM map ready — start with: docker-compose up -d osrm"
+
+db-migrate:
+	alembic upgrade head
+	@echo "✓ Migrations applied"
+
+db-migration:
+	alembic revision -m "$(msg)"
+	@echo "✓ New migration created — escribí el DDL a mano en versions/ (sin autogenerate, el proyecto no usa ORM declarativo)"

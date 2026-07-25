@@ -325,6 +325,40 @@ Se levantó un servicio OSRM real (`make osrm-prepare` con el extracto de Perú 
 
 ---
 
+## [0.4.5] — 2026-07-24
+
+### 🗑️ Removed
+
+- **Eliminado el árbol académico Qt/C++17 completo (`src/`, 17 archivos) más `tests/test_core.cpp` y `demo.py` — código huérfano que contradecía la propia documentación del proyecto.** `CHANGELOG.md` (sección "Notas de Migración") declara explícitamente: *"El código académico anterior (Git history) se preserva pero no se integra en este árbol"* — la intención documentada era que ese código viviera solo en el historial de git, recuperable si hiciera falta, no como archivos activos en el working tree. En la práctica seguía presente físicamente, sin estar referenciado en ningún `CMakeLists.txt` activo (ni raíz ni `core_cpp/`) — confirmado que no compila como parte del proyecto actual.
+- **Descubierto mediante `graphify` (mapeo de grafo de conocimiento del repo, herramienta nueva de esta sesión):** el clustering agrupó `src/core/Instancia.h`, `src/core/Solucion.h`, `src/core/Cliente.h` junto con `backend_python/models/__init__.py` en la misma comunidad, porque comparten nombres de clase (`Instancia`, `Solucion`, `Cliente`) con el dominio activo — ruido de similitud que había pasado inadvertido en todas las rondas de auditoría anteriores, porque nadie inspecciona manualmente un directorio (`src/`) que no aparece en ningún build activo.
+- `tests/test_core.cpp`: compilaba explícitamente contra `src/` (ver su propio comentario de cabecera con instrucciones de compilación manual `g++ -Isrc ...`) — 100% huérfano, sin ningún caller ni referencia fuera de sí mismo.
+- `demo.py`: parcialmente vivo (sí importaba `backend_python.models`/`solver_orchestrator`, el backend real), pero era el demo de Fase 1 sin persistencia — completamente superado por `demo_phase3_e2e.py` (Fase 3, con persistencia real). Eliminado por redundancia, no por estar roto.
+- Verificado: 60/60 tests Python pasando sin regresión, build C++ limpio (CMake + `vrp_core` + `vrp_solver` compilan igual sin `src/`) — ninguno de los tres elementos era una dependencia real del sistema activo.
+
+---
+
+## [0.5.0] — 2026-07-24
+
+### ✨ Added — Logística real: capacidad por vehículo, dimensiones, multi-paquete, cobertura, ETA estimado
+
+**Backend — capacidad por vehículo (reemplaza el planteo inicial de "capacidad promedio").** El solver asumía flota homogénea: un `num_vehicles` + un `vehicle_capacity` único para todos. En uso real la flota es heterogénea (motos, camionetas, capacidades distintas). En vez de aproximar con un promedio (que puede sobrecargar el vehículo real más chico), se extendió el algoritmo de construcción (`NearestNeighbor`, que ya arranca ruta → agrega el nodo más cercano que quepa → cierra cuando no entra nada más → arranca la siguiente) para aceptar una **lista de capacidades, una por vehículo**, usadas en orden. Cambios:
+- `core_cpp/include/builders/nearest_neighbor.hpp`: constructor de `double capacity` a `std::vector<double> capacities`; cada ronda usa `capacities[vehicle_id % capacities.size()]`.
+- `core_cpp/src/bindings.cpp`: firma pybind11 actualizada (conversión automática lista Python ↔ `std::vector<double>` vía `pybind11/stl.h`, ya incluido).
+- `backend_python/models/__init__.py`: `Flota.capacidades_vehiculos: Optional[List[float]]` (nuevo campo opcional) + propiedad `capacidad_total` que la considera si está presente.
+- `backend_python/api/__init__.py`: `InstanceRequest.vehicle_capacities: Optional[List[float]]` — si viene, tiene prioridad sobre `vehicle_capacity` escalar.
+- `backend_python/service/solver_orchestrator.py`: tanto el pipeline C++ como el fallback Python (`_construct_route_greedy`) usan la lista si está presente, vía helper `_capacity_for_vehicle`.
+- **100% retrocompatible**: sin `vehicle_capacities` en el request, comportamiento idéntico a antes (verificado con el mismo payload de pruebas anteriores: `total_cost: 48761.3`, sin cambios). 62 tests Python + suite C++ (`ctest`) pasan sin modificación.
+- Verificado con flota heterogénea real (3 vehículos: 200/100/50 kg): ninguna ruta excede la capacidad de su vehículo asignado.
+
+**Frontend — Fase 1 de logística real, capturada íntegramente en UI/datos, sin más cambios al contrato HTTP que el campo opcional de arriba:**
+- **Dimensiones + multi-paquete**: `src/lib/types.ts` (`Package`, `ClientGroup`), `src/lib/importClients.ts` extendido con columnas `cliente_id`/`largo`/`ancho`/`alto` (alias case-insensitive) y `groupPackagesByClient` — filas con el mismo `cliente_id` se agrupan en un punto de entrega con paquetes separados, demanda = suma de pesos, volumen = suma de `largo×ancho×alto`. Sin columna `cliente_id`, cada fila sigue siendo un cliente distinto (retrocompatible con `clientes_lima_50.csv`/`clientes_lima_100.csv`).
+- **Catálogo de vehículos**: `src/lib/vehicleCatalog.ts` + `VehicleCatalogManager.tsx` (persistido en `localStorage`, reutilizable entre sesiones) + `FleetSelector.tsx` (selección de flota disponible "hoy"). `src/lib/buildInstance.ts::buildInstanceRequest` colapsa la selección a `vehicle_capacities` ordenada de mayor a menor capacidad (aplicando el margen de tolerancia de cada vehículo) antes de enviar al backend.
+- **Zona de cobertura**: polígono dibujado sobre el mapa existente (`RouteMap.tsx`, modo `editingCoverage` — sin mapa separado), persistido en `localStorage` (`src/lib/coverageZone.ts`), point-in-polygon vía `@turf/boolean-point-in-polygon` (nueva dependencia). Clientes fuera de zona se marcan visualmente y se excluyen del `POST /solve`, sin perderse de la UI.
+- **ETA estimado**: `src/lib/osrm.ts::fetchRouteWithDuration` (nueva función, no rompe `fetchRouteGeometry`) trae la duración total de cada ruta desde OSRM; `src/lib/eta.ts::estimateRouteEtas` prorratea esa duración por distancia acumulada de la geometría hasta cada parada (asume velocidad constante — aproximación declarada, no una predicción de tráfico real) y aplica un colchón heurístico (±10%, mínimo 5 min) para mostrar un rango, no una hora exacta. Puramente informativo, post-solve, sin restricción real en el solver — decisión explícita para evitar prometer una precisión de VRPTW que el algoritmo actual no soporta.
+- Explícitamente descartado para esta fase (decisión del usuario): prioridad real de "urgente" en el algoritmo del solver.
+
+---
+
 ## Rechazado / Descartado
 
 Decisiones evaluadas y descartadas explícitamente para mantener el alcance YAGNI/KISS:

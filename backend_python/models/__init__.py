@@ -1,7 +1,7 @@
 """Entidades de dominio para VRP: Coordinate, Cliente, Deposito, Flota, Instancia, Ruta, Solucion."""
 
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 import math
 
 
@@ -14,13 +14,22 @@ class Coordinate:
 
 @dataclass(frozen=True)
 class Cliente:
-    """Cliente: ubicación + demanda.
+    """Cliente: ubicación + demanda + contacto opcional.
+
+    Los campos de contacto no los usa el solver (solo coordenada/demanda) —
+    viajan junto a la instancia para poder mostrarlos/imprimirlos en la hoja
+    de ruta (el repartidor en la calle necesita nombre/teléfono/dirección
+    para confirmar la entrega, no solo un id de cliente).
+
     Invariantes:
     - demanda > 0
     """
     id: int
     coordenada: Coordinate
     demanda: float
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
+    address: Optional[str] = None
 
     def __post_init__(self):
         if self.demanda <= 0:
@@ -39,18 +48,38 @@ class Deposito:
 @dataclass(frozen=True)
 class Flota:
     """Configuración de flota de vehículos.
+
+    capacidades_vehiculos es opcional: si se especifica, el solver asigna
+    capacidad[i] al vehículo i (en el orden dado) en vez de repetir
+    capacidad_por_vehiculo para toda la flota — soporta flota heterogénea
+    real (motos, camionetas, etc. con capacidades distintas).
+
     Invariantes:
     - num_vehiculos >= 1
     - capacidad_por_vehiculo > 0
+    - si capacidades_vehiculos está presente: len == num_vehiculos, todas > 0
     """
     num_vehiculos: int
     capacidad_por_vehiculo: float
+    capacidades_vehiculos: Optional[List[float]] = None
 
     def __post_init__(self):
         if self.num_vehiculos < 1:
             raise ValueError("num_vehiculos debe ser >= 1")
         if self.capacidad_por_vehiculo <= 0:
             raise ValueError("capacidad debe ser positiva")
+        if self.capacidades_vehiculos is not None:
+            if len(self.capacidades_vehiculos) != self.num_vehiculos:
+                raise ValueError("capacidades_vehiculos debe tener num_vehiculos elementos")
+            if any(c <= 0 for c in self.capacidades_vehiculos):
+                raise ValueError("cada capacidad en capacidades_vehiculos debe ser positiva")
+
+    @property
+    def capacidad_total(self) -> float:
+        """Capacidad total de la flota, considerando capacidades heterogéneas si aplica."""
+        if self.capacidades_vehiculos is not None:
+            return sum(self.capacidades_vehiculos)
+        return self.num_vehiculos * self.capacidad_por_vehiculo
 
 
 @dataclass(frozen=True)
@@ -73,8 +102,7 @@ class Instancia:
 
         # Verificar demanda total
         demanda_total = sum(c.demanda for c in self.clientes)
-        capacidad_total = self.flota.num_vehiculos * self.flota.capacidad_por_vehiculo
-        if demanda_total > capacidad_total:
+        if demanda_total > self.flota.capacidad_total:
             raise ValueError("demanda total excede capacidad de la flota")
 
 

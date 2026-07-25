@@ -1,0 +1,7 @@
+cliente_id,x,y,peso_kg,nombre,telefono,direccion
+depot,-77.03500,-12.04640,0,Almacén Central,,Av. Abancay 456, Cercado de Lima
+c1,-76.96122,-12.15144,14,María Fernández,987654321,"Jr. Los Álamos 220, Surco, casa celeste"
+c2,-76.96981,-12.15790,5,Jorge Quispe,912345678,"Av. Benavides 1580, dpto 502"
+c3,-77.03558,-12.02526,3,Lucía Ramos,998877665,"Calle Las Begonias 88, frente al parque"
+c3,-77.03558,-12.02526,4,Lucía Ramos,998877665,"Calle Las Begonias 88, frente al parque"
+c4,-77.01200,-12.08900,8,Carlos Medina,955443322,"Av. Aviación 3400, portón verde"

@@ -64,7 +64,7 @@ PYBIND11_MODULE(vrp_solver, m) {
 
     // NearestNeighbor solver binding
     py::class_<NearestNeighbor>(m, "NearestNeighbor")
-        .def(py::init<const Graph&, const CostMatrix&, int, double>())
+        .def(py::init<const Graph&, const CostMatrix&, int, std::vector<double>>())
         .def("solve", &NearestNeighbor::solve);
 
     // SimulatedAnnealing optimizer binding

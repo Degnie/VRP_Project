@@ -6,6 +6,7 @@
 #include <vector>
 #include <limits>
 #include <algorithm>
+#include <utility>
 
 namespace vrp {
 namespace builders {
@@ -15,11 +16,15 @@ private:
     const Graph& graph;
     const CostMatrix& costs;
     int depot;
-    double vehicle_capacity;
+    std::vector<double> capacities;
 
 public:
-    NearestNeighbor(const Graph& g, const CostMatrix& c, int depot_id, double capacity)
-        : graph(g), costs(c), depot(depot_id), vehicle_capacity(capacity) {}
+    // capacities: una capacidad por vehiculo, en el orden en que se asignan
+    // (ronda 0 usa capacities[0], ronda 1 usa capacities[1], etc). Si se
+    // agotan antes que los clientes, se reutiliza la ultima (modulo) en vez
+    // de acceder fuera de rango.
+    NearestNeighbor(const Graph& g, const CostMatrix& c, int depot_id, std::vector<double> vehicle_capacities)
+        : graph(g), costs(c), depot(depot_id), capacities(std::move(vehicle_capacities)) {}
 
     Solution solve() {
         int n = graph.size();
@@ -38,6 +43,7 @@ public:
             int current = depot;
             double load = 0.0;
             bool added_any = false;
+            double vehicle_capacity = capacities[vehicle_id % capacities.size()];
 
             // Inner loop: extend current route greedily
             for (int iter = 0; iter < n; ++iter) {

@@ -4,6 +4,14 @@ uvicorn[standard]==0.24.0
 pydantic==2.5.0
 psycopg2-binary==2.9.9
 pymongo==4.6.0
+alembic==1.18.5
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+# bcrypt>=4.1 rompe la detección de versión interna de passlib 1.7.4
+# (AttributeError: module 'bcrypt' has no attribute '__about__') — fijado a
+# la última versión compatible, no a la más nueva.
+bcrypt==4.0.1
+reportlab==4.5.1
 
 # Testing
 pytest==7.4.3

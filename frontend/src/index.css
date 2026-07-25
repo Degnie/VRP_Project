@@ -1,0 +1,59 @@
+:root {
+  --color-ink: #101c33;
+  --color-ink-soft: #33415c;
+  --color-paper: #f4f6f3;
+  --color-surface: #ffffff;
+  --color-beacon: #c4622d;
+  --color-beacon-bg: #fbf0e7;
+  --color-border: #d8ded9;
+  --color-error: #a3383c;
+  --color-error-bg: #f8ecec;
+  --color-ok: #2f6f4f;
+  --color-ok-bg: #eaf3ee;
+
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  --radius-control: 6px;
+  --radius-badge: 2px;
+
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--color-ink);
+  background: var(--color-paper);
+}
+
+#root {
+  min-height: 100svh;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-beacon);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

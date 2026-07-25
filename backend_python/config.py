@@ -50,6 +50,13 @@ class Config:
     API_PORT = int(os.getenv("API_PORT", "8000"))
     API_DEBUG = os.getenv("API_DEBUG", "False").lower() == "true"
 
+    # CORS: origins permitidos para el frontend (dev server de Vite por defecto)
+    CORS_ORIGINS = [
+        origin.strip()
+        for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:5183").split(",")
+        if origin.strip()
+    ]
+
     # Solver
     SOLVER_TIMEOUT_SECONDS = int(os.getenv("SOLVER_TIMEOUT_SECONDS", "30"))
 
@@ -58,6 +65,13 @@ class Config:
     OSRM_URL = os.getenv("OSRM_URL", "")
     OSRM_MAX_TABLE_SIZE = int(os.getenv("OSRM_MAX_TABLE_SIZE", "100"))
     OSRM_TIMEOUT_SECONDS = int(os.getenv("OSRM_TIMEOUT_SECONDS", "5"))
+
+    # Auth (JWT). Sin default real para JWT_SECRET: un secret vacío no debe
+    # firmar tokens en silencio — create_app() valida esto explícitamente al
+    # arrancar (ver backend_python/api/__init__.py).
+    JWT_SECRET = os.getenv("JWT_SECRET", "")
+    JWT_ALGORITHM = "HS256"
+    JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "480"))  # 8h, un turno de trabajo
 
 
 # Singleton instance

@@ -55,3 +55,6 @@ docs/_build/
 # Claude Code (private)
 .claude/
 CLAUDE.md
+
+# graphify (regenerable knowledge graph output)
+graphify-out/

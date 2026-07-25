@@ -3,11 +3,23 @@ Tests para API REST integration con persistencia.
 Valida que los adapters se inicialicen y que la API pueda resolver instancias.
 """
 
+import uuid
+
 import pytest
 from backend_python.models import (
     Coordinate, Cliente, Deposito, Flota, Instancia
 )
 from backend_python.config import get_config
+
+
+def _auth_headers(client):
+    """Registra una cuenta de prueba nueva y devuelve headers con su JWT."""
+    email = f"api-test-{uuid.uuid4().hex[:8]}@test.local"
+    response = client.post("/auth/register", json={
+        "account_name": "API Test Co", "email": email, "password": "clave123",
+    })
+    token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
 
 
 class TestConfiguration:
@@ -128,13 +140,14 @@ class TestSolveEndpoint:
 
         request_data = {
             "instancia_id": "test_api_001",
-            "coordinates": [(0, 0), (10, 10), (20, 20)],
+            "coordinates": [(10, 10), (20, 20)],
             "demands": [100, 100],
             "num_vehicles": 1,
-            "vehicle_capacity": 500
+            "vehicle_capacity": 500,
+            "depot_coordinates": (0, 0),
         }
 
-        response = client.post("/solve", json=request_data)
+        response = client.post("/solve", json=request_data, headers=_auth_headers(client))
 
         # May fail if no DB, but should return proper HTTP status
         assert response.status_code in [200, 500, 503]
@@ -161,8 +174,26 @@ class TestSolveEndpoint:
             "vehicle_capacity": 100
         }
 
-        response = client.post("/solve", json=request_data)
+        response = client.post("/solve", json=request_data, headers=_auth_headers(client))
         assert response.status_code == 422
+
+    def test_solve_requires_auth(self):
+        """POST /solve sin token debe rechazar con 401, no intentar resolver."""
+        from fastapi.testclient import TestClient
+        from backend_python.api import create_app
+
+        app = create_app()
+        client = TestClient(app)
+
+        request_data = {
+            "instancia_id": "test_no_auth",
+            "coordinates": [(0, 0), (10, 10)],
+            "demands": [10],
+            "num_vehicles": 1,
+            "vehicle_capacity": 100,
+        }
+        response = client.post("/solve", json=request_data)
+        assert response.status_code == 401
 
     def test_instances_list_endpoint(self):
         """GET /instances debe responder."""
@@ -172,7 +203,7 @@ class TestSolveEndpoint:
         app = create_app()
         client = TestClient(app)
 
-        response = client.get("/instances")
+        response = client.get("/instances", headers=_auth_headers(client))
 
         # May fail if no PostgreSQL, but should return proper status
         assert response.status_code in [200, 503]

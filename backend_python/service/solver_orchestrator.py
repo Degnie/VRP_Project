@@ -74,6 +74,21 @@ class SolverOrchestrator:
 
         return solution
 
+    def _capacity_for_vehicle(self, vehicle_id: int) -> float:
+        """
+        Capacidad efectiva del vehículo vehicle_id (0-indexado).
+
+        Si la flota tiene capacidades_vehiculos (heterogénea), usa
+        capacities[vehicle_id % len(capacities)] — el módulo evita out-of-range
+        si se construyen más rutas que capacidades explícitas (no debería
+        pasar en uso normal, ya que num_vehiculos == len(capacidades)).
+        Si no, usa la capacidad escalar homogénea de siempre.
+        """
+        capacidades = self.instance.flota.capacidades_vehiculos
+        if capacidades:
+            return capacidades[vehicle_id % len(capacidades)]
+        return self.instance.flota.capacidad_por_vehiculo
+
     def _build_cost_lookup(self) -> Dict[Tuple[int, int], float]:
         """
         Construye la matriz de costos como dict {(from_id, to_id): distancia}.
@@ -151,6 +166,7 @@ class SolverOrchestrator:
         costo = 0.0
         current_id = 0  # depot
         load = 0.0
+        capacity = self._capacity_for_vehicle(vehicle_id)
 
         for _ in range(len(self.instance.clientes)):
             best_client = None
@@ -159,7 +175,7 @@ class SolverOrchestrator:
             for client in self.instance.clientes:
                 if client.id not in visited:
                     new_load = load + client.demanda
-                    if new_load <= self.instance.flota.capacidad_por_vehiculo:
+                    if new_load <= capacity:
                         dist = cost_lookup[(current_id, client.id)]
                         if dist < best_dist:
                             best_dist = dist
@@ -220,11 +236,14 @@ class SolverOrchestrator:
 
         # 3. Nearest Neighbor (construcción inicial)
         self.log.append("Step 1: Nearest Neighbor construction")
+        capacidades = self.instance.flota.capacidades_vehiculos or (
+            [self.instance.flota.capacidad_por_vehiculo] * self.instance.flota.num_vehiculos
+        )
         nn_solver = vrp_solver.NearestNeighbor(
             graph,
             cost_matrix,
             0,  # depot id
-            self.instance.flota.capacidad_por_vehiculo
+            capacidades
         )
         nn_solution = nn_solver.solve()
         self.log.append(f"  NN cost: {nn_solution.total_cost:.2f}")
