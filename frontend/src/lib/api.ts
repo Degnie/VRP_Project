@@ -7,26 +7,88 @@ import type {
   MyRouteResponse,
   RescheduleResponse,
   SolutionResponse,
+  TeamMember,
   TokenResponse,
+  UpdateClientRequest,
   UserOut,
   VehicleTypeDTO,
 } from "./types";
-import { getSession } from "./auth";
+import { getSession, clearSession } from "./auth";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+// Evento que App.tsx escucha para volver a la pantalla de login apenas el
+// backend rechaza el token (sesión revocada por desactivación, o expirada).
+// Sin esto, un usuario desactivado mientras tenía la app abierta se quedaba
+// viendo el mensaje crudo del backend ("Invalid or expired token", en
+// inglés) en cada intento, sin ninguna salida clara ni indicación de que
+// tenía que volver a loguear.
+export const SESSION_EXPIRED_EVENT = "vrp:session-expired";
+
+// Bug real (Ronda 50, repartidor): fetch() sin timeout ni AbortController
+// dejaba la promesa colgada para siempre si el backend/proxy se quedaba sin
+// responder (no un error de red — eso sí lo captura el catch de abajo, sino
+// una conexión que nunca cierra). El botón de estado quedaba en "Guardando…"
+// indefinidamente, sin error, sin forma de reintentar salvo recargar la
+// página (perdiendo el intento en curso en silencio). 15s es generoso para
+// una conexión de datos móvil lenta, pero corta antes de que el repartidor
+// piense que la app se colgó.
+const REQUEST_TIMEOUT_MS = 15000;
+// Bug real (Ronda 51, dueño): ese mismo timeout de 15s, al ser global para
+// TODA llamada a request(), también cortaba /solve — medido contra el
+// backend real: ~11s con 300 clientes, ~25.5s con 500. Con instancias
+// grandes (reales en data/), el frontend abortaba una resolución que estaba
+// funcionando bien y a punto de terminar, mostrando un error falso y
+// arriesgando que el dueño reintentara mientras el cómputo original seguía
+// corriendo del lado del servidor (abortar el fetch no cancela el cómputo
+// backend). Los endpoints de resolución usan un timeout mucho más generoso.
+const SOLVE_TIMEOUT_MS = 120000;
+
+async function request<T>(path: string, init?: RequestInit, timeoutMs: number = REQUEST_TIMEOUT_MS): Promise<T> {
   const session = getSession();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (session) headers["Authorization"] = `Bearer ${session.accessToken}`;
 
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { ...headers, ...(init?.headers as Record<string, string> | undefined) },
-    ...init,
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      headers: { ...headers, ...(init?.headers as Record<string, string> | undefined) },
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if ((err as Error).name === "AbortError") {
+      throw new Error("La conexión tardó demasiado — probá de nuevo.");
+    }
+    // fetch() rechaza con un TypeError genérico ("Failed to fetch") cuando no
+    // hay conexión — mensaje técnico en inglés, sin sentido para alguien en
+    // la calle con mala señal tratando de guardar un estado de entrega.
+    throw new Error("Sin conexión — no se pudo guardar. Probá de nuevo.");
+  } finally {
+    clearTimeout(timeoutId);
+  }
   if (!res.ok) {
-    const detail = await res.json().catch(() => null);
-    throw new Error(detail?.detail ?? `${res.status} ${res.statusText}`);
+    if (res.status === 401 && session) {
+      // Distingue "nunca logueaste" (no había session — dejalo pasar como
+      // error normal, ej. login con credenciales incorrectas) de "tu sesión
+      // ya no vale" (SÍ había session pero el backend la rechazó — token
+      // vencido, o usuario desactivado en medio de su uso).
+      clearSession();
+      window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+      throw new Error("Tu sesión ya no es válida — volvé a iniciar sesión.");
+    }
+    const body = await res.json().catch(() => null);
+    // Un HTTPException manual da detail: string, pero un 422 de validación
+    // de Pydantic da detail: [{msg, loc, ...}] — sin este chequeo, un error
+    // de validación (ej. coordenada fuera de rango) se mostraba como
+    // "[object Object]" en vez del mensaje real.
+    const detail = Array.isArray(body?.detail)
+      ? body.detail.map((e: { msg?: string }) => e.msg).filter(Boolean).join(" — ")
+      : body?.detail;
+    throw new Error(detail || `${res.status} ${res.statusText}`);
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -36,7 +98,8 @@ export const api = {
   health: () => request<HealthStatus>("/health"),
   solve: (body: InstanceRequest) =>
     request<SolutionResponse>("/solve", { method: "POST", body: JSON.stringify(body) }),
-  listInstances: () => request<InstanceSummary[]>("/instances"),
+  listInstances: (opts?: { assignedOnly?: boolean }) =>
+    request<InstanceSummary[]>(`/instances${opts?.assignedOnly ? "?assigned_only=true" : ""}`),
   getSolution: (instanciaId: string) =>
     request<SolutionResponse>(`/solutions/${encodeURIComponent(instanciaId)}`),
   exportSolutionPdf: async (instanciaId: string, vehicleId?: number): Promise<Blob> => {
@@ -47,7 +110,14 @@ export const api = {
     const res = await fetch(`${API_BASE}/solutions/${encodeURIComponent(instanciaId)}/export.pdf${query}`, {
       headers,
     });
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    if (!res.ok) {
+      // Mismo parseo de `detail` que request() — sin esto, un 404 (ej. el
+      // dueño borró la instancia mientras el repartidor tenía la ruta
+      // abierta) se mostraba como el string crudo "404 Not Found" en vez
+      // del mensaje real del backend ("Instance not found"/"Solution not found").
+      const body = await res.json().catch(() => null);
+      throw new Error(body?.detail || `${res.status} ${res.statusText}`);
+    }
     return res.blob();
   },
 
@@ -59,6 +129,12 @@ export const api = {
   me: () => request<UserOut>("/auth/me"),
   createUser: (body: { email: string; password: string; full_name?: string; role: string }) =>
     request<UserOut>("/auth/users", { method: "POST", body: JSON.stringify(body) }),
+  listTeam: () => request<TeamMember[]>("/auth/users"),
+  setUserActive: (userId: string, active: boolean) =>
+    request<TeamMember>(`/auth/users/${encodeURIComponent(userId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ active }),
+    }),
 
   // --- Catálogo de vehículos ---
   listVehicleCatalog: () => request<VehicleTypeDTO[]>("/vehicle-catalog"),
@@ -79,18 +155,33 @@ export const api = {
   deleteCoverageZone: () => request<void>("/coverage-zone", { method: "DELETE" }),
 
   // --- Ciclo de vida de pedido ---
-  updateDeliveryStatus: (instanciaId: string, clienteId: number, status: DeliveryStatus) =>
-    request<{ status: DeliveryStatus }>(
+  updateDeliveryStatus: (instanciaId: string, clienteId: number, status: DeliveryStatus, note?: string) =>
+    request<{ status: DeliveryStatus; note?: string }>(
       `/instances/${encodeURIComponent(instanciaId)}/clients/${clienteId}/status`,
-      { method: "PUT", body: JSON.stringify({ status }) }
+      { method: "PUT", body: JSON.stringify({ status, note }) }
     ),
   setAssignments: (instanciaId: string, assignments: Record<number, string>) =>
     request<{ assignments: Record<number, string> }>(
       `/instances/${encodeURIComponent(instanciaId)}/assignments`,
       { method: "PUT", body: JSON.stringify({ assignments }) }
     ),
+  getAssignments: (instanciaId: string) =>
+    request<Record<number, string>>(`/instances/${encodeURIComponent(instanciaId)}/assignments`),
+  getDeliveryStatuses: (instanciaId: string) =>
+    request<Record<number, { status: DeliveryStatus; note?: string }>>(
+      `/instances/${encodeURIComponent(instanciaId)}/delivery-statuses`
+    ),
   getMyRoute: (instanciaId: string) =>
     request<MyRouteResponse>(`/instances/${encodeURIComponent(instanciaId)}/my-route`),
   rescheduleInstance: (instanciaId: string) =>
     request<RescheduleResponse>(`/instances/${encodeURIComponent(instanciaId)}/reschedule`, { method: "POST" }),
+  solveExistingInstance: (instanciaId: string) =>
+    request<SolutionResponse>(`/instances/${encodeURIComponent(instanciaId)}/solve`, { method: "POST" }),
+  updateClient: (instanciaId: string, clientId: number, body: UpdateClientRequest) =>
+    request<{ id: number; x: number; y: number; demand: number }>(
+      `/instances/${encodeURIComponent(instanciaId)}/clients/${clientId}`,
+      { method: "PATCH", body: JSON.stringify(body) }
+    ),
+  deleteInstance: (instanciaId: string) =>
+    request<{ deleted: boolean }>(`/instances/${encodeURIComponent(instanciaId)}`, { method: "DELETE" }),
 };

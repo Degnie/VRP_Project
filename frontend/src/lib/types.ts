@@ -34,6 +34,7 @@ export interface InstanceSummary {
   num_clients: number;
   num_vehicles: number;
   capacity: number;
+  created_at?: string;
 }
 
 export interface HealthStatus {
@@ -59,6 +60,15 @@ export interface UserOut {
   email: string;
   role: Role;
   full_name?: string;
+}
+
+// --- Gestión de equipo (Etapa A de mejoras post-auditoría) ---
+export interface TeamMember {
+  id: string;
+  email: string;
+  role: Role;
+  full_name?: string;
+  active: boolean;
 }
 
 // --- Catálogo de vehículos (persistido en el backend, por cuenta — Etapa 1) ---
@@ -110,13 +120,23 @@ export interface ClientGroup {
   address?: string;
 }
 
+export interface UpdateClientRequest {
+  x: number;
+  y: number;
+  demand?: number;
+  // null = borrar el campo a propósito; undefined (omitido) = no tocarlo.
+  customer_name?: string | null;
+  customer_phone?: string | null;
+  address?: string | null;
+}
+
 // --- Zona de cobertura (persistida en el backend, por cuenta — Etapa 1) ---
 export interface CoveragePolygon {
   points: [number, number][];
 }
 
 // --- Ciclo de vida de pedido (Etapa 4) ---
-export type DeliveryStatus = "pendiente" | "entregado" | "no_encontrado" | "reprogramado";
+export type DeliveryStatus = "pendiente" | "entregado" | "no_encontrado" | "reprogramado" | "rechazado";
 
 export interface RouteAssignment {
   vehicleId: number;
@@ -127,6 +147,7 @@ export interface RouteStop {
   client_id: number;
   sequence: number;
   delivery_status: DeliveryStatus;
+  delivery_note?: string;
   customer_name?: string;
   customer_phone?: string;
   address?: string;

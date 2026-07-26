@@ -18,8 +18,12 @@ export function getSession(): AuthSession | null {
   return readStored<AuthSession>(TOKEN_KEY);
 }
 
-export function saveSession(session: AuthSession): void {
-  writeStored(TOKEN_KEY, session);
+// Devuelve si la sesión efectivamente quedó persistida — si localStorage
+// está bloqueado (Safari privado) o sin cuota, el login "funciona" en
+// memoria pero desaparece en el próximo reload sin ningún aviso, dejando al
+// usuario deslogueado de golpe más tarde sin entender por qué.
+export function saveSession(session: AuthSession): boolean {
+  return writeStored(TOKEN_KEY, session);
 }
 
 export function clearSession(): void {

@@ -56,5 +56,9 @@ docs/_build/
 .claude/
 CLAUDE.md
 
+# Gemini (private)
+.gemini/
+GEMINI.md
+
 # graphify (regenerable knowledge graph output)
 graphify-out/

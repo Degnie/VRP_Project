@@ -7,7 +7,7 @@ nativas (GTK/Pango) que weasyprint sí requeriría en Windows.
 """
 
 from io import BytesIO
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
@@ -20,11 +20,20 @@ def build_route_pdf(
     solution: Solucion,
     clientes_by_id: Dict[int, Cliente],
     vehicle_id: Optional[int] = None,
+    rescheduled_client_ids: Optional[Set[int]] = None,
 ) -> bytes:
     """Arma el PDF de hoja de ruta.
 
     Una página por vehículo (o solo la de `vehicle_id` si se especifica).
+
+    `rescheduled_client_ids`: bug real (Ronda 48) — reprogramar un pedido lo
+    mueve a otra instancia y lo marca "reprogramado" en la original, pero
+    `solution.rutas[].secuencia` nunca se recalcula (solo "Resolver de nuevo"
+    lo hace), así que sin este filtro el PDF exportado seguía incluyendo esa
+    parada como trabajo real — el repartidor iba a una dirección que ya no le
+    corresponde, sin ninguna marca en el papel que lo distinga.
     """
+    rescheduled_client_ids = rescheduled_client_ids or set()
     rutas = solution.rutas
     if vehicle_id is not None:
         rutas = [r for r in rutas if r.vehicle_id == vehicle_id]
@@ -44,7 +53,7 @@ def build_route_pdf(
         pdf.drawString(margin, y, f"Hoja de ruta — Vehículo {ruta.vehicle_id + 1}")
         y -= 0.8 * cm
         pdf.setFont("Helvetica", 10)
-        pdf.drawString(margin, y, f"Instancia: {solution.instancia_id}  ·  Costo ruta: {ruta.costo:.2f}")
+        pdf.drawString(margin, y, f"Instancia: {solution.instancia_id}  ·  Distancia ruta: {ruta.costo / 1000:.1f} km")
         y -= 1.2 * cm
 
         pdf.setFont("Helvetica-Bold", 10)
@@ -57,7 +66,11 @@ def build_route_pdf(
         y -= 0.6 * cm
 
         pdf.setFont("Helvetica", 9)
-        for stop_num, client_id in enumerate(ruta.secuencia, start=1):
+        stop_num = 0
+        for client_id in ruta.secuencia:
+            if client_id in rescheduled_client_ids:
+                continue
+            stop_num += 1
             if y < margin:
                 pdf.showPage()
                 y = height - margin

@@ -4,15 +4,20 @@ import { saveSession } from "../lib/auth";
 
 interface Props {
   onLoggedIn: () => void;
+  // Mensaje a mostrar apenas se monta (ej. "tu sesión ya no es válida" tras
+  // un logout automático por 401) — sin esto, App.tsx desmontaba la vista
+  // anterior antes de que su error local llegara a renderizarse, dejando al
+  // usuario en una pantalla de login sin ninguna pista de qué pasó.
+  initialError?: string | null;
 }
 
-export function LoginForm({ onLoggedIn }: Props) {
+export function LoginForm({ onLoggedIn, initialError }: Props) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [accountName, setAccountName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialError ?? null);
   const [busy, setBusy] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -24,7 +29,17 @@ export function LoginForm({ onLoggedIn }: Props) {
         mode === "login"
           ? await api.login({ email, password })
           : await api.register({ account_name: accountName, email, password, full_name: fullName || undefined });
-      saveSession({ accessToken: token.access_token, role: token.role, accountId: token.account_id });
+      const persisted = saveSession({ accessToken: token.access_token, role: token.role, accountId: token.account_id });
+      if (!persisted) {
+        // Sin esto, el login "funcionaba" (entrás a la app) pero el token
+        // nunca quedó en localStorage — al primer reload o cierre de
+        // pestaña la sesión desaparecía sin ningún aviso, dejando al
+        // usuario deslogueado sin entender por qué.
+        setError(
+          "No se pudo guardar tu sesión en este navegador (¿modo privado o memoria llena?). " +
+            "Entraste igual, pero vas a tener que volver a loguearte si cerrás esta pestaña."
+        );
+      }
       onLoggedIn();
     } catch (err) {
       setError((err as Error).message);

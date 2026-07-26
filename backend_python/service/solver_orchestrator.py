@@ -214,6 +214,16 @@ class SolverOrchestrator:
         """
         n_nodes = 1 + len(self.instance.clientes)
 
+        # Graph.add_node exige ids contiguos 0..n_nodes-1 (valida rango en
+        # C++) — client.id es el id REAL del cliente (ej. en una instancia
+        # reprogramada, son los ids originales de los pendientes, con huecos
+        # si el cliente entregado no fue el de mayor id). Sin este mapeo a
+        # índices contiguos, reprogramar y re-resolver tiraba
+        # "Node ID out of bounds" en cualquier caso donde el subconjunto de
+        # pendientes no fuera exactamente el prefijo 1..k.
+        real_to_node = {client.id: i + 1 for i, client in enumerate(self.instance.clientes)}
+        node_to_real = {node_id: real_id for real_id, node_id in real_to_node.items()}
+
         # 1. Build C++ graph (1 nodo depósito + N clientes; NO num_vehiculos)
         graph = vrp_solver.Graph(n_nodes)
 
@@ -221,18 +231,20 @@ class SolverOrchestrator:
         graph.add_node(0, self.instance.deposito.coordenada.x,
                        self.instance.deposito.coordenada.y, 0)
 
-        # Add clients (id=1..n)
+        # Add clients (id=1..n, mapeado a índice contiguo)
         for client in self.instance.clientes:
-            graph.add_node(client.id, client.coordenada.x,
+            graph.add_node(real_to_node[client.id], client.coordenada.x,
                           client.coordenada.y, int(client.demanda))
 
         # 2. Build cost matrix from cost_lookup (OSRM o euclídea, ya resuelto en solve())
-        node_ids = [0] + [c.id for c in self.instance.clientes]
+        # cost_lookup sigue indexado por id REAL (así lo arma _build_cost_lookup),
+        # pero la matriz C++ se llena por índice de nodo contiguo.
+        real_node_ids = [0] + [c.id for c in self.instance.clientes]
         cost_matrix = vrp_solver.CostMatrix(n_nodes)
-        for i, from_id in enumerate(node_ids):
-            for j, to_id in enumerate(node_ids):
+        for i, from_real_id in enumerate(real_node_ids):
+            for j, to_real_id in enumerate(real_node_ids):
                 if i != j:
-                    cost_matrix.set_cost(i, j, cost_lookup[(from_id, to_id)])
+                    cost_matrix.set_cost(i, j, cost_lookup[(from_real_id, to_real_id)])
 
         # 3. Nearest Neighbor (construcción inicial)
         self.log.append("Step 1: Nearest Neighbor construction")
@@ -260,7 +272,9 @@ class SolverOrchestrator:
         )
         sa_solution = sa_solver.solve(nn_solution)
         self.log.append(f"  SA cost: {sa_solution.total_cost:.2f}")
-        self.log.append(f"  Improvement: {(nn_solution.total_cost - sa_solution.total_cost) / nn_solution.total_cost * 100:.2f}%")
+        if nn_solution.total_cost > 0:
+            improvement_pct = (nn_solution.total_cost - sa_solution.total_cost) / nn_solution.total_cost * 100
+            self.log.append(f"  Improvement: {improvement_pct:.2f}%")
 
         # 5. 3-opt Polish (refinamiento final)
         self.log.append("Step 3: 3-opt Polish")
@@ -272,9 +286,12 @@ class SolverOrchestrator:
         # 6. Convert C++ Solution → Python Solucion
         # cpp_route.sequence incluye el depósito (id=0) al inicio y fin de cada
         # ruta (depot -> clientes -> depot); Ruta.secuencia es solo clientes.
+        # Se traduce cada índice de nodo contiguo de vuelta al id REAL del
+        # cliente — Ruta.secuencia/get_pending_clients/etc. siguen operando
+        # con los ids reales que el resto del sistema conoce.
         rutas = []
         for cpp_route in sa_solution.routes:
-            secuencia = [node_id for node_id in cpp_route.sequence if node_id != 0]
+            secuencia = [node_to_real[node_id] for node_id in cpp_route.sequence if node_id != 0]
             ruta = Ruta(
                 vehicle_id=cpp_route.vehicle_id,
                 secuencia=secuencia,

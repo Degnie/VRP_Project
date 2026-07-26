@@ -22,6 +22,12 @@ export function RouteMap({ instance, solution, editingCoverage, coveragePoints, 
   const [mapError, setMapError] = useState<string | null>(null);
   const onPolygonChangeRef = useRef(onPolygonChange);
   onPolygonChangeRef.current = onPolygonChange;
+  // Último valor de coveragePoints conocido de forma síncrona — clicks
+  // rápidos en el mapa (dos "click" nativos antes de que React re-renderice
+  // el prop) leían el mismo coveragePoints stale del closure y el segundo
+  // pisaba al primero, perdiendo un vértice sin ningún aviso.
+  const coveragePointsRef = useRef(coveragePoints);
+  coveragePointsRef.current = coveragePoints;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -89,7 +95,11 @@ export function RouteMap({ instance, solution, editingCoverage, coveragePoints, 
     if (!map || !editingCoverage) return;
 
     const handleClick = (e: maplibregl.MapMouseEvent) => {
-      const next = [...(coveragePoints ?? []), [e.lngLat.lng, e.lngLat.lat] as [number, number]];
+      const next: [number, number][] = [
+        ...(coveragePointsRef.current ?? []),
+        [e.lngLat.lng, e.lngLat.lat],
+      ];
+      coveragePointsRef.current = next;
       onPolygonChangeRef.current?.(next);
     };
 
@@ -111,18 +121,22 @@ export function RouteMap({ instance, solution, editingCoverage, coveragePoints, 
       const points = coveragePoints ?? [];
       if (!map.getSource("coverage-polygon")) {
         map.addSource("coverage-polygon", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        // #101c33 (--color-ink): no coincide con ningún color de ROUTE_COLORS ni con
+        // --color-beacon/--color-error/--color-ok — el naranja anterior (#c4622d) era
+        // literalmente ROUTE_COLORS[1], la ruta del segundo vehículo se confundía con
+        // el polígono de cobertura en el mismo mapa.
         map.addLayer({
           id: "coverage-polygon-fill",
           type: "fill",
           source: "coverage-polygon",
           filter: ["==", "$type", "Polygon"],
-          paint: { "fill-color": "#c4622d", "fill-opacity": 0.12 },
+          paint: { "fill-color": "#101c33", "fill-opacity": 0.18 },
         });
         map.addLayer({
           id: "coverage-polygon-line",
           type: "line",
           source: "coverage-polygon",
-          paint: { "line-color": "#c4622d", "line-width": 2, "line-dasharray": [2, 1] },
+          paint: { "line-color": "#101c33", "line-width": 3, "line-dasharray": [2, 1] },
         });
       }
 
@@ -153,7 +167,19 @@ export function RouteMap({ instance, solution, editingCoverage, coveragePoints, 
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !instance) return;
+    if (!map) return;
+    if (!instance) {
+      // Sin esto, resolver una instancia reprogramada (App.tsx limpia
+      // `instance` a null tras el fix de "Resolver ahora") dejaba el mapa
+      // mostrando el depósito/clientes/rutas de la instancia VIEJA para
+      // siempre — el banner "Cargá una instancia" es solo un overlay
+      // flotante, no reemplaza lo ya dibujado.
+      const emptyCollection = { type: "FeatureCollection" as const, features: [] };
+      (map.getSource("depot-point") as maplibregl.GeoJSONSource | undefined)?.setData(emptyCollection);
+      (map.getSource("client-points") as maplibregl.GeoJSONSource | undefined)?.setData(emptyCollection);
+      (map.getSource("route-lines") as maplibregl.GeoJSONSource | undefined)?.setData(emptyCollection);
+      return;
+    }
     let cancelled = false;
 
     const ensureLayers = () => {

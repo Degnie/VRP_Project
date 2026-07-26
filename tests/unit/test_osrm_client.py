@@ -64,3 +64,21 @@ class TestOSRMIntegration:
         for i in range(len(coords)):
             for j in range(len(coords)):
                 assert abs(single[i][j] - chunked[i][j]) < 1.0  # tolerancia de redondeo
+
+    def test_rejects_coords_with_swapped_lat_lon(self):
+        """Bug real: coordenadas con ejes lat/lon invertidos (error común de
+        import/integración) caen dentro del rango numérico válido por
+        coincidencia y pasan _validate_coords_are_geographic — pero OSRM las
+        interpreta como un punto sin cobertura real y las "snapea" a un nodo
+        cualquiera a miles de km, devolviendo una matriz de distancia-cero
+        sintácticamente válida pero sin sentido, sin ningún error visible.
+        Con lon/lat invertido a lat/lon (Lima con orden (-12.05,-77.04) en vez
+        de (-77.04,-12.05)), debe rechazarse por snap-distance absurda."""
+        swapped_coords = [(-12.05, -77.04), (-12.06, -77.05)]
+        with pytest.raises(OSRMError, match="snapped"):
+            get_osrm_matrix(
+                swapped_coords,
+                base_url=os.getenv("OSRM_URL"),
+                max_table_size=100,
+                timeout_seconds=5,
+            )

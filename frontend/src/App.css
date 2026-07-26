@@ -69,6 +69,12 @@
   width: 360px;
   flex-shrink: 0;
   overflow-y: auto;
+  /* Sin esto, un overflow-y:auto con overflow-x implícito "visible" se computa
+     como auto en ambos ejes (regla CSS) — el sidebar entero se volvía
+     scrolleable horizontalmente en vez de que el scroll quedara contenido
+     dentro de .vehicle-table, cortando "Margen (%)" sin ninguna forma de
+     verlo completo. */
+  overflow-x: hidden;
   padding: var(--space-6);
   background: var(--color-surface);
   border-right: 1px solid var(--color-border);
@@ -162,7 +168,7 @@ input {
   font-family: var(--font-mono);
   font-size: 14px;
   padding: var(--space-2) var(--space-3);
-  min-height: 40px;
+  min-height: 44px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-control);
   background: var(--color-surface);
@@ -333,6 +339,9 @@ input:focus-visible {
 
 .btn-tertiary {
   align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
   font-family: var(--font-sans);
   font-size: 11px;
   font-weight: 500;
@@ -471,6 +480,14 @@ input:focus-visible {
   margin-bottom: var(--space-4);
 }
 
+.reschedule-actions,
+.assign-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
 .stat {
   display: flex;
   flex-direction: column;
@@ -502,11 +519,28 @@ input:focus-visible {
   grid-template-columns: auto 1fr auto;
   grid-template-areas:
     "swatch label cost"
+    "assign assign assign"
     "stops stops stops";
   gap: var(--space-1) var(--space-2);
   align-items: baseline;
   padding: var(--space-3) 0;
   border-bottom: 1px solid var(--color-border);
+}
+
+.route-assign {
+  grid-area: assign;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12px;
+  color: var(--color-ink-soft);
+}
+
+.route-assign select {
+  font: inherit;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
 }
 
 .route-item:last-child {
@@ -571,6 +605,27 @@ input:focus-visible {
   color: var(--color-ok);
 }
 
+/* Bug real (Ronda 47): una parada reprogramada a otra instancia se veía
+   idéntica a cualquier parada activa (ETA en verde, selector operable), sin
+   ninguna pista de que ya no pertenece a esta ruta. */
+.route-stop--reprogramado {
+  opacity: 0.6;
+}
+
+.route-stop-reprogramado-warning {
+  flex-basis: 100%;
+  color: var(--color-error);
+  font-weight: 500;
+  margin: 0;
+}
+
+.route-reprogramado-warning {
+  color: var(--color-error);
+  font-weight: 500;
+  margin: 0;
+  flex-basis: 100%;
+}
+
 .delivery-status-select {
   font-size: 11px;
   padding: 2px var(--space-1);
@@ -585,13 +640,66 @@ input:focus-visible {
 }
 
 .delivery-status-select--no_encontrado,
-.delivery-status-select--reprogramado {
+.delivery-status-select--reprogramado,
+.delivery-status-select--rechazado {
   color: var(--color-error);
 }
 
 .delivery-status-error {
   font-size: 11px;
   color: var(--color-error);
+}
+
+.delivery-status-note {
+  display: block;
+  font-size: 11px;
+  color: var(--color-ink-soft);
+  margin-top: var(--space-1);
+}
+
+.confirm-dialog-note-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: 13px;
+  color: var(--color-ink-soft);
+  margin-top: var(--space-3);
+}
+
+.confirm-dialog-note-field textarea {
+  font: inherit;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  resize: vertical;
+}
+
+.client-edit-control {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  font-size: 13px;
+}
+
+.client-edit-control label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--color-ink-soft);
+}
+
+.client-edit-control input {
+  font-size: 13px;
+}
+
+.client-edit-actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
 }
 
 .route-eta--loading {
@@ -687,6 +795,12 @@ input:focus-visible {
   border: 0;
   padding: 0;
   margin: var(--space-6) 0;
+  /* Un <fieldset> tiene un min-width implícito de "min-content" que ignora
+     overflow-x:auto de sus descendientes — sin esto, .vehicle-catalog-fieldset
+     crecía por encima del ancho de .instance-form (311px medido en vivo,
+     vs 380px del fieldset) empujando "Margen (%)" y el botón × fuera del
+     sidebar, que a su vez los recortaba sin ningún scroll accesible. */
+  min-width: 0;
 }
 
 .vehicle-catalog-fieldset legend {
@@ -741,6 +855,17 @@ input:focus-visible {
   font-size: 13px;
 }
 
+.input-needs-name,
+.input-sync-error {
+  border-color: var(--color-error);
+}
+
+.vehicle-sync-error {
+  font-size: 11px;
+  color: var(--color-error);
+  margin: calc(-1 * var(--space-1)) 0 var(--space-2);
+}
+
 /* ---- fleet selector ---- */
 
 .fleet-selector {
@@ -758,6 +883,15 @@ input:focus-visible {
 .fleet-vehicle-name {
   font-size: 13px;
   font-weight: 500;
+  /* Bug real (Ronda 50): sin min-width:0 (mismo patrón ya corregido en
+     .clients-list-head) el grid item no encoge bajo su contenido — un nombre
+     de vehículo largo hacía crecer la fila a varias líneas de alto en vez de
+     truncarse con "…", desalineando esa fila con la columna de spec/input
+     (que quedan centradas en una fila mucho más alta que ellas). */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fleet-vehicle-spec {
@@ -820,6 +954,13 @@ input:focus-visible {
 
   .app-sidebar {
     width: 100%;
+    /* Sin esto, un hijo flex no se encoge por debajo del ancho intrínseco de
+       su contenido — la tabla del catálogo de vehículos (min-width: 380px)
+       empujaba el sidebar (y el documento entero) a un scrollWidth mayor que
+       el viewport en celulares angostos (320px), pese al overflow-x:hidden
+       de acá abajo. Afectaba a toda cuenta nueva, porque el catálogo arranca
+       abierto por defecto cuando está vacío. */
+    min-width: 0;
     max-height: 55svh;
     border-right: 0;
     border-bottom: 1px solid var(--color-border);
@@ -851,6 +992,14 @@ input:focus-visible {
   font-weight: 600;
 }
 
+/* .btn-reset comparte min-height: 32px con la vista de escritorio del
+   dueño — acá es el único botón fijo del header sticky mientras el
+   repartidor scrollea su ruta en la calle, así que necesita el mínimo
+   táctil de 44px sin afectar el layout de escritorio. */
+.repartidor-header .btn-reset {
+  min-height: 44px;
+}
+
 .repartidor-body {
   padding: var(--space-4);
   display: flex;
@@ -858,8 +1007,29 @@ input:focus-visible {
   gap: var(--space-4);
 }
 
+/* Sin regla propia, un <select> nativo medía 19px de alto — es el primer
+   control que toca el repartidor al abrir la app, antes de ver ninguna
+   parada, así que necesita el mínimo táctil igual que los demás botones. */
+.repartidor-body select {
+  min-height: 44px;
+}
+
+.repartidor-body select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .repartidor-export {
   min-height: 44px;
+}
+
+.repartidor-empty {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-control);
+  background: var(--color-surface);
+  color: var(--color-ink-soft);
+  font-size: 14px;
 }
 
 .repartidor-stops {
@@ -916,6 +1086,12 @@ input:focus-visible {
   align-items: center;
 }
 
+.repartidor-stop-note {
+  font-size: 13px;
+  color: var(--color-ink-soft);
+  margin: var(--space-1) 0 0;
+}
+
 .repartidor-stop-actions {
   display: flex;
   flex-wrap: wrap;
@@ -945,4 +1121,117 @@ input:focus-visible {
     max-width: 480px;
     margin: 0 auto;
   }
+}
+
+/* ---- gestión de equipo (Etapa A) ---- */
+
+.team-management {
+  width: 100%;
+  padding: var(--space-6);
+  overflow-y: auto;
+}
+
+.team-management-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-4);
+}
+
+.team-invite-form {
+  max-width: 480px;
+  margin-bottom: var(--space-6);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.team-invite-form h3 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 var(--space-3);
+}
+
+.team-table {
+  width: 100%;
+  max-width: 720px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.team-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-ink-soft);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.team-table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.team-row--inactive {
+  color: var(--color-ink-soft);
+  opacity: 0.6;
+}
+
+/* ---- confirm dialog (Etapa E) ---- */
+
+.confirm-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(16, 28, 51, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  padding: var(--space-4);
+}
+
+.confirm-dialog {
+  width: 100%;
+  max-width: 360px;
+  /* Sin esto, en landscape con teclado virtual abierto (ej. escribiendo la
+     nota de "Rechazado") el viewport visible se reduce a ~150-200px y el
+     diálogo (título + mensaje + textarea + botones) podía superar esa
+     altura sin ningún scroll — el botón "Confirmar" quedaba recortado
+     fuera de pantalla, inalcanzable sin cerrar el teclado a ciegas. */
+  max-height: min(90vh, 480px);
+  overflow-y: auto;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  padding: var(--space-4);
+}
+
+.confirm-dialog h3 {
+  margin: 0 0 var(--space-2);
+  font-size: 15px;
+}
+
+.confirm-dialog p {
+  margin: 0 0 var(--space-4);
+  font-size: 13px;
+  color: var(--color-ink-soft);
+}
+
+.confirm-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* ---- feedback de guardado por parada (Etapa E) ---- */
+
+.stop-save-indicator {
+  font-size: 11px;
+  margin-left: var(--space-2);
+}
+
+.stop-save-indicator--saved {
+  color: var(--color-ok);
 }

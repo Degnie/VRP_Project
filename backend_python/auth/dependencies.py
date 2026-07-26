@@ -3,6 +3,8 @@ FastAPI dependencies para auth: extraer y validar el usuario actual desde el
 JWT del header Authorization, y restringir endpoints por rol.
 """
 
+from typing import Optional
+
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -10,6 +12,19 @@ from backend_python.auth import decode_access_token
 from backend_python.persistence.postgres_adapter import PostgreSQLAdapter
 
 _bearer_scheme = HTTPBearer(auto_error=False)
+
+# Seteado por create_app() al arrancar — permite que get_current_user
+# rechace tokens de usuarios ya desactivados sin esperar a que el JWT
+# expire (hasta JWT_EXPIRE_MINUTES, por defecto 8 horas). Sin esto, un
+# operario/repartidor desactivado por el dueño (ej. tras un despido o un
+# error grave) seguía teniendo acceso de escritura completo con su sesión
+# ya abierta hasta que el token venciera solo.
+_pg_adapter: Optional[PostgreSQLAdapter] = None
+
+
+def set_pg_adapter(adapter: Optional[PostgreSQLAdapter]) -> None:
+    global _pg_adapter
+    _pg_adapter = adapter
 
 
 class CurrentUser:
@@ -30,6 +45,11 @@ def get_current_user(
     payload = decode_access_token(credentials.credentials)
     if payload is None:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    if _pg_adapter is not None:
+        user = _pg_adapter.get_user_by_id(payload["sub"])
+        if user is None or not user["active"]:
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     return CurrentUser(
         user_id=payload["sub"],

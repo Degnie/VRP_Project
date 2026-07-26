@@ -1,5 +1,5 @@
 import type { ClientGroup, Package } from "./types";
-import { parseCsvText } from "./csv";
+import { decodeCsvFile, parseCsvText } from "./csv";
 
 export interface ImportedPackageRow {
   clientId: string;
@@ -135,7 +135,15 @@ function rowsFromMatrix(matrix: unknown[][]): ImportResult {
       return;
     }
 
-    const clientId = ci !== undefined ? String(row[ci]).trim() : `row-${idx}`;
+    // Bug real: sin el `?? ""` (a diferencia de las columnas hermanas de
+    // abajo), una fila más corta que el header por una celda de "id" final
+    // vacía/omitida (común al no usar coma trailing en CSV) daba
+    // `row[ci] === undefined` → `String(undefined)` === "undefined" (string
+    // literal, no vacío) — no caía en el fallback `clientId || row-${idx}`
+    // de más abajo. Dos filas así en el mismo archivo terminaban con el
+    // mismo clientId "undefined" y groupPackagesByClient las fusionaba en
+    // un solo cliente, perdiendo silenciosamente al segundo (y su x/y reales).
+    const clientId = ci !== undefined ? String(row[ci] ?? "").trim() : `row-${idx}`;
     const lengthCm = li !== undefined ? String(row[li] ?? "").trim() : "";
     const widthCm = wdi !== undefined ? String(row[wdi] ?? "").trim() : "";
     const heightCm = hi !== undefined ? String(row[hi] ?? "").trim() : "";
@@ -200,7 +208,7 @@ export async function importClientsFromFile(file: File): Promise<ImportResult> {
   const isCsv = file.name.toLowerCase().endsWith(".csv") || file.type === "text/csv";
 
   if (isCsv) {
-    const text = await file.text();
+    const text = await decodeCsvFile(file);
     return rowsFromMatrix(parseCsvText(text));
   }
 

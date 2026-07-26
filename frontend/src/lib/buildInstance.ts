@@ -12,6 +12,7 @@ export interface BuildInstanceResult {
   request: InstanceRequest | null;
   excludedOutOfCoverage: number;
   volumeWarnings: string[];
+  overCapacityClientIds?: string[];
 }
 
 function packageVolumeM3(lengthCm: number, widthCm: number, heightCm: number): number {
@@ -49,6 +50,21 @@ export function buildInstanceRequest(params: BuildInstanceParams): BuildInstance
   const demands = inCoverageClients.map((c) =>
     Math.max(1, Math.round(c.packages.reduce((sum, p) => sum + p.weightKg, 0)))
   );
+
+  // Un cliente cuyo peso supera el vehículo más grande seleccionado es
+  // irresoluble aunque la capacidad TOTAL de la flota alcance — el backend
+  // ahora lo rechaza (Instancia.__post_init__), pero conviene avisar acá
+  // mismo, antes del POST /solve, en vez de esperar el 400.
+  const maxCapacity = flatCapacities[0]; // ya viene ordenado de mayor a menor
+  const overCapacityClients = inCoverageClients.filter((c, i) => demands[i] > maxCapacity);
+  if (overCapacityClients.length > 0) {
+    return {
+      request: null,
+      excludedOutOfCoverage,
+      volumeWarnings: [],
+      overCapacityClientIds: overCapacityClients.map((c) => c.clientId),
+    };
+  }
   const contacts = inCoverageClients.map((c) =>
     c.customerName || c.customerPhone || c.address
       ? { customer_name: c.customerName, customer_phone: c.customerPhone, address: c.address }

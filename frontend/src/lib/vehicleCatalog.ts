@@ -1,9 +1,10 @@
 import type { VehicleType, VehicleTypeDTO } from "./types";
-import { parseCsvText } from "./csv";
+import { decodeCsvFile, parseCsvText } from "./csv";
 import { api } from "./api";
 
-function toDTO(t: Omit<VehicleType, "id">): VehicleTypeDTO {
+function toDTO(t: Partial<Pick<VehicleType, "id">> & Omit<VehicleType, "id">): VehicleTypeDTO {
   return {
+    id: t.id,
     name: t.name,
     weight_capacity_kg: t.weightCapacityKg,
     volume_capacity_m3: t.volumeCapacityM3,
@@ -31,7 +32,9 @@ export function createLocalVehicleType(partial: Omit<VehicleType, "id">): Vehicl
   return { id: crypto.randomUUID(), ...partial };
 }
 
-export async function createVehicleType(partial: Omit<VehicleType, "id">): Promise<VehicleType> {
+export async function createVehicleType(
+  partial: (Partial<Pick<VehicleType, "id">> & Omit<VehicleType, "id">)
+): Promise<VehicleType> {
   const dto = await api.createVehicleCatalogEntry(toDTO(partial));
   return fromDTO(dto as VehicleTypeDTO & { id: string });
 }
@@ -130,7 +133,7 @@ async function parseVehicleImportFile(file: File): Promise<VehicleImportResult> 
   const isCsv = file.name.toLowerCase().endsWith(".csv") || file.type === "text/csv";
 
   if (isCsv) {
-    const text = await file.text();
+    const text = await decodeCsvFile(file);
     return vehicleRowsFromMatrix(parseCsvText(text));
   }
 
@@ -145,14 +148,29 @@ async function parseVehicleImportFile(file: File): Promise<VehicleImportResult> 
 export interface VehicleImportOutcome {
   types: VehicleType[];
   skipped: number;
+  /** Nombres de filas que sí pasaron el parseo pero el POST al backend falló. */
+  failed: string[];
 }
 
 /** Importa un archivo y crea cada fila válida en el backend (una llamada por fila). */
 export async function importVehicleTypesFromFile(file: File): Promise<VehicleImportOutcome> {
   const { rows, skipped } = await parseVehicleImportFile(file);
   const types: VehicleType[] = [];
+  const failed: string[] = [];
+  // Bug real: un `for` con `await` sin try/catch por fila hacía que el POST
+  // fallido de una fila intermedia (red inestable, 500 puntual) cortara la
+  // función entera — las filas ANTERIORES ya habían quedado creadas en el
+  // backend, pero el throw impedía retornarlas, así que la UI no mostraba
+  // ninguna y el catch genérico del caller decía "archivo inválido" (falso:
+  // el archivo se leyó bien, algunas filas sí se persistieron). Reintentar
+  // el mismo archivo duplicaba esas filas ya creadas. Ahora cada fila se
+  // aísla: las que sí se crean se devuelven igual, las que fallan se listan.
   for (const row of rows) {
-    types.push(await createVehicleType(row));
+    try {
+      types.push(await createVehicleType(row));
+    } catch {
+      failed.push(row.name);
+    }
   }
-  return { types, skipped };
+  return { types, skipped, failed };
 }

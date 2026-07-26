@@ -93,6 +93,7 @@ class Instancia:
     deposito: Deposito
     flota: Flota
     clientes: List[Cliente]
+    created_at: Optional[str] = None  # ISO 8601; None si no viene de persistencia
 
     def __post_init__(self):
         # Verificar IDs únicos
@@ -104,6 +105,23 @@ class Instancia:
         demanda_total = sum(c.demanda for c in self.clientes)
         if demanda_total > self.flota.capacidad_total:
             raise ValueError("demanda total excede capacidad de la flota")
+
+        # Un cliente cuya demanda excede el vehículo más grande de la flota es
+        # irresoluble aunque la demanda TOTAL entre — ni el fallback Python ni
+        # el builder NearestNeighbor de C++ dejan un cliente sin visitar (el de
+        # C++ queda en un `while(true)` sin salida, colgando el proceso). Se
+        # corta acá, antes de llegar a cualquiera de los dos solvers.
+        max_capacidad_vehiculo = (
+            max(self.flota.capacidades_vehiculos)
+            if self.flota.capacidades_vehiculos
+            else self.flota.capacidad_por_vehiculo
+        )
+        sobrepasados = [c.id for c in self.clientes if c.demanda > max_capacidad_vehiculo]
+        if sobrepasados:
+            raise ValueError(
+                f"cliente(s) {sobrepasados} tienen demanda mayor a la capacidad de "
+                f"cualquier vehículo disponible ({max_capacidad_vehiculo})"
+            )
 
 
 @dataclass(frozen=True)

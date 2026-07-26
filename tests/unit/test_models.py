@@ -139,6 +139,26 @@ class TestInstancia:
                 clientes=clientes
             )
 
+    def test_instancia_cliente_excede_vehiculo_mas_grande_aunque_total_alcance(self):
+        """Bug real: demanda total (90) cabe en la flota (100), pero el
+        cliente 1 (80) solo cabria repartido entre ambos vehiculos, y ningun
+        vehiculo individual (50 c/u) puede llevarlo solo — irresoluble para
+        NearestNeighbor (cuelga el builder C++, revienta el fallback Python)."""
+        depot = Deposito(Coordinate(0.0, 0.0), "Depot")
+        flota = Flota(num_vehiculos=2, capacidad_por_vehiculo=50, capacidades_vehiculos=[50, 50])
+        clientes = [
+            Cliente(1, Coordinate(10.0, 10.0), 80),
+            Cliente(2, Coordinate(20.0, 20.0), 10),
+        ]
+
+        with pytest.raises(ValueError, match="capacidad de cualquier vehículo"):
+            Instancia(
+                id="inst_percliente_invalido",
+                deposito=depot,
+                flota=flota,
+                clientes=clientes
+            )
+
     def test_instancia_cliente_ids_unicas(self):
         """Invariante: cada cliente tiene ID único."""
         depot = Deposito(Coordinate(0.0, 0.0), "Depot")

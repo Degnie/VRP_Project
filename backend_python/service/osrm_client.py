@@ -20,6 +20,26 @@ class OSRMError(Exception):
     """OSRM no disponible, timeout, o respuesta inválida."""
 
 
+# Metros máximos que OSRM puede "snapear" una coordenada pedida a la calle más
+# cercana antes de que la tratemos como sin sentido geográfico. Coordenadas con
+# ejes lat/lon invertidos (error común de import/integración) caen dentro del
+# rango numérico válido de _validate_coords_are_geographic por coincidencia,
+# pero OSRM las snapea a un punto cualquiera a miles de km — produciendo una
+# matriz de distancias 0 sintácticamente válida pero sin sentido, sin ningún
+# error visible. OSRM ya reporta esa distancia de snap en cada source/destination.
+_MAX_SNAP_DISTANCE_METERS = 50_000
+
+
+def _validate_snap_distances(entries: List[dict]) -> None:
+    for entry in entries:
+        distance = entry.get("distance")
+        if distance is not None and distance > _MAX_SNAP_DISTANCE_METERS:
+            raise OSRMError(
+                f"coordinate snapped {distance:.0f}m from nearest road — "
+                "likely invalid/inverted lat-lon, not real street coverage"
+            )
+
+
 def _validate_coords_are_geographic(coords: List[Tuple[float, float]]) -> None:
     """
     Verifica que las coordenadas estén en rango lon/lat válido antes de llamar
@@ -53,6 +73,9 @@ def _table_request(coords: List[Tuple[float, float]], base_url: str, timeout_sec
     distances = data.get("distances")
     if distances is None:
         raise OSRMError("OSRM response missing 'distances' (check annotations=distance)")
+
+    _validate_snap_distances(data.get("sources") or [])
+    _validate_snap_distances(data.get("destinations") or [])
 
     return distances
 
@@ -127,6 +150,9 @@ def get_osrm_matrix(
             block_distances = data.get("distances")
             if block_distances is None:
                 raise OSRMError("OSRM response missing 'distances' (check annotations=distance)")
+
+            _validate_snap_distances(data.get("sources") or [])
+            _validate_snap_distances(data.get("destinations") or [])
 
             for i, row in enumerate(block_distances):
                 for j, dist in enumerate(row):

@@ -51,6 +51,40 @@ class TestVehicleCatalogAPI:
         assert len(listed.json()) == 1
         assert listed.json()[0]["name"] == "Moto"
 
+    def test_create_respects_client_provided_id(self):
+        """Bug real: el backend siempre generaba su propio id (uuid4),
+        ignorando cualquier id enviado por el cliente. El frontend arma la
+        fila con un id local (crypto.randomUUID()) de forma optimista antes
+        de que el POST termine — si la respuesta traía un id distinto, el
+        snapshot stale de esa respuesta terminaba pisando cualquier edición
+        hecha mientras la request estaba en vuelo (nombre truncado al
+        escribir rápido). Ahora el backend debe respetar el id del cliente."""
+        client = self._client()
+        token, _ = self._register_owner(client, "Flota IdClient")
+        headers = {"Authorization": f"Bearer {token}"}
+        client_id = str(uuid.uuid4())
+
+        created = client.post("/vehicle-catalog", json={
+            "id": client_id, "name": "Camioneta", "weight_capacity_kg": 300,
+            "volume_capacity_m3": 2.5, "tolerance_margin": 0.9,
+        }, headers=headers)
+        assert created.status_code == 201
+        assert created.json()["id"] == client_id
+
+        listed = client.get("/vehicle-catalog", headers=headers)
+        assert listed.json()[0]["id"] == client_id
+
+    def test_create_without_id_still_generates_one(self):
+        client = self._client()
+        token, _ = self._register_owner(client, "Flota SinId")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        created = client.post("/vehicle-catalog", json={
+            "name": "Moto", "weight_capacity_kg": 30, "volume_capacity_m3": 0.15, "tolerance_margin": 0.9,
+        }, headers=headers)
+        assert created.status_code == 201
+        assert created.json()["id"]
+
     def test_catalog_isolated_between_accounts(self):
         client = self._client()
         token_a, _ = self._register_owner(client, "Flota B")
@@ -107,3 +141,36 @@ class TestVehicleCatalogAPI:
 
         listed = client.get("/vehicle-catalog", headers=headers)
         assert listed.json() == []
+
+    def test_create_rejects_non_positive_capacity(self):
+        """Bug real (Ronda 35, operario): capacidad 0/negativa se persistía
+        sin error y solo fallaba, de forma opaca, recién al resolver una
+        instancia con ese vehículo seleccionado."""
+        client = self._client()
+        token, _ = self._register_owner(client, "Flota Cap0")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        for bad_weight, bad_volume in [(0, 0.15), (-10, 0.15), (30, 0), (30, -1)]:
+            response = client.post("/vehicle-catalog", json={
+                "name": "Moto", "weight_capacity_kg": bad_weight,
+                "volume_capacity_m3": bad_volume, "tolerance_margin": 0.9,
+            }, headers=headers)
+            assert response.status_code == 422
+
+        listed = client.get("/vehicle-catalog", headers=headers)
+        assert listed.json() == []
+
+    def test_update_rejects_non_positive_capacity(self):
+        client = self._client()
+        token, _ = self._register_owner(client, "Flota Cap0Upd")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        created = client.post("/vehicle-catalog", json={
+            "name": "Moto", "weight_capacity_kg": 30, "volume_capacity_m3": 0.15, "tolerance_margin": 0.9,
+        }, headers=headers)
+        vehicle_id = created.json()["id"]
+
+        updated = client.put(f"/vehicle-catalog/{vehicle_id}", json={
+            "name": "Moto", "weight_capacity_kg": 0, "volume_capacity_m3": 0.15, "tolerance_margin": 0.9,
+        }, headers=headers)
+        assert updated.status_code == 422

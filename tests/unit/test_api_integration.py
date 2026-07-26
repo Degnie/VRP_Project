@@ -177,6 +177,123 @@ class TestSolveEndpoint:
         response = client.post("/solve", json=request_data, headers=_auth_headers(client))
         assert response.status_code == 422
 
+    def test_solve_rejects_out_of_range_coordinates(self):
+        """Bug real: una coordenada fuera de rango real (lat/lng, ej. typo de
+        tecla o CSV mal importado) pasaba el 200 de /solve sin ninguna
+        validación, y recién explotaba en el frontend — MapLibre lanza
+        "Invalid LngLat" al intentar centrar el mapa en la solución, y como
+        no había Error Boundary, esa excepción tumbaba toda la SPA."""
+        from fastapi.testclient import TestClient
+        from backend_python.api import create_app
+
+        app = create_app()
+        client = TestClient(app)
+
+        request_data = {
+            "instancia_id": "test_out_of_range_coords",
+            "coordinates": [(500.0, 500.0), (1.0, 1.0)],  # lat=500 imposible
+            "demands": [10, 10],
+            "num_vehicles": 1,
+            "vehicle_capacity": 100,
+            "depot_coordinates": (0, 0),
+        }
+
+        response = client.post("/solve", json=request_data, headers=_auth_headers(client))
+        assert response.status_code == 422
+
+    def test_solve_rejects_contact_field_over_column_length(self):
+        """Bug real: ContactInfo no tenía max_length (a diferencia de
+        UpdateClientRequest, que sí lo tiene para el mismo dato) — una
+        dirección/nombre más larga que la columna real (VARCHAR(500)/
+        VARCHAR(255)) pasaba Pydantic sin quejarse, el solve corría en
+        memoria, y recién explotaba en save_instance con un
+        StringDataRightTruncation sin capturar, devolviendo un 500 genérico."""
+        from fastapi.testclient import TestClient
+        from backend_python.api import create_app
+
+        app = create_app()
+        client = TestClient(app)
+
+        request_data = {
+            "instancia_id": "test_contact_too_long",
+            "coordinates": [(10.0, 10.0), (20.0, 20.0)],
+            "demands": [10, 10],
+            "num_vehicles": 1,
+            "vehicle_capacity": 100,
+            "depot_coordinates": (0, 0),
+            "contacts": [{"address": "x" * 501}, None],
+        }
+
+        response = client.post("/solve", json=request_data, headers=_auth_headers(client))
+        assert response.status_code == 422
+
+    def test_solve_rejects_instancia_id_over_column_length(self):
+        """Mismo patrón que ContactInfo: instancia_id es texto libre del
+        formulario, sin max_length, persistido en instancias.id VARCHAR(255)
+        namespaceado con el account_id — un valor largo pasaba Pydantic y
+        explotaba en save_instance con un 500 genérico en vez de un 422 claro."""
+        from fastapi.testclient import TestClient
+        from backend_python.api import create_app
+
+        app = create_app()
+        client = TestClient(app)
+
+        request_data = {
+            "instancia_id": "x" * 250,
+            "coordinates": [(10.0, 10.0), (20.0, 20.0)],
+            "demands": [10, 10],
+            "num_vehicles": 1,
+            "vehicle_capacity": 100,
+            "depot_coordinates": (0, 0),
+        }
+
+        response = client.post("/solve", json=request_data, headers=_auth_headers(client))
+        assert response.status_code == 422
+
+    def test_solve_rejects_out_of_range_depot(self):
+        from fastapi.testclient import TestClient
+        from backend_python.api import create_app
+
+        app = create_app()
+        client = TestClient(app)
+
+        request_data = {
+            "instancia_id": "test_out_of_range_depot",
+            "coordinates": [(1.0, 1.0), (2.0, 2.0)],
+            "demands": [10, 10],
+            "num_vehicles": 1,
+            "vehicle_capacity": 100,
+            "depot_coordinates": (0, -200),  # longitud imposible
+        }
+
+        response = client.post("/solve", json=request_data, headers=_auth_headers(client))
+        assert response.status_code == 422
+
+    def test_solve_rejects_client_exceeding_every_vehicle_capacity(self):
+        """POST /solve con un cliente cuya demanda supera al vehículo más
+        grande debe responder 400, no colgarse ni devolver 500 — bug real:
+        el builder NearestNeighbor (Python y C++) nunca termina de servir un
+        cliente así, aunque la demanda TOTAL de la flota alcance."""
+        from fastapi.testclient import TestClient
+        from backend_python.api import create_app
+
+        app = create_app()
+        client = TestClient(app)
+
+        request_data = {
+            "instancia_id": "test_over_capacity",
+            "coordinates": [(10, 10), (20, 20)],
+            "demands": [80, 10],
+            "num_vehicles": 2,
+            "vehicle_capacity": 50,
+            "vehicle_capacities": [50, 50],
+            "depot_coordinates": (0, 0),
+        }
+
+        response = client.post("/solve", json=request_data, headers=_auth_headers(client))
+        assert response.status_code == 400
+        assert "capacidad de cualquier vehículo" in response.json()["detail"]
+
     def test_solve_requires_auth(self):
         """POST /solve sin token debe rechazar con 401, no intentar resolver."""
         from fastapi.testclient import TestClient
@@ -243,3 +360,21 @@ class TestEndToEndFlow:
         for ruta in solution.rutas:
             all_visited.update(ruta.secuencia)
         assert len(all_visited) == 2
+
+    def test_solve_instance_client_at_depot_coordinate_never_500s(self):
+        """Bug real: un cliente en la misma coordenada que el depósito da
+        costo de ruta NN = 0.0, y el pipeline C++ calculaba el % de mejora
+        de SA dividiendo por ese costo (nn_solution.total_cost) sin chequear
+        cero — ZeroDivisionError no capturado específicamente, devuelto como
+        500 genérico en /solve para cualquier cuenta nueva que lo disparara."""
+        from backend_python.service.solver_orchestrator import solve_instance
+
+        depot = Deposito(Coordinate(0.0, 0.0), "Depot")
+        flota = Flota(num_vehiculos=1, capacidad_por_vehiculo=100)
+        clientes = [Cliente(1, Coordinate(0.0, 0.0), 10)]
+        instance = Instancia("test_zero_cost", depot, flota, clientes)
+
+        solution = solve_instance(instance)
+
+        assert solution is not None
+        assert solution.costo_total == 0.0

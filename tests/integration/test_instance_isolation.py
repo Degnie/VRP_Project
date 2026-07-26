@@ -98,3 +98,81 @@ class TestInstanceIsolation:
         client = self._client()
         response = client.get("/solutions/anything")
         assert response.status_code == 401
+
+    def test_same_visible_instancia_id_across_accounts_does_not_collide(self):
+        """Bug real: dos cuentas resolviendo con el mismo instancia_id por
+        defecto ("instancia-1") pisaban silenciosamente flota/clientes entre
+        sí, porque instancias.id era PK global. Namespacing por account_id
+        debe hacer que cada cuenta vea únicamente su propia flota/solución."""
+        client = self._client()
+        token_a = self._register_owner(client, "Collision A")
+        token_b = self._register_owner(client, "Collision B")
+
+        shared_id = "instancia-1"
+        solve_a = self._solve_instance(client, token_a, shared_id)
+        assert solve_a.status_code == 200
+        solve_b = self._solve_instance(client, token_b, shared_id)
+        assert solve_b.status_code == 200
+
+        sol_a = client.get(f"/solutions/{shared_id}", headers={"Authorization": f"Bearer {token_a}"})
+        sol_b = client.get(f"/solutions/{shared_id}", headers={"Authorization": f"Bearer {token_b}"})
+        assert sol_a.status_code == 200
+        assert sol_b.status_code == 200
+        assert sol_a.json()["instancia_id"] == shared_id
+        assert sol_b.json()["instancia_id"] == shared_id
+
+        list_a = client.get("/instances", headers={"Authorization": f"Bearer {token_a}"})
+        list_b = client.get("/instances", headers={"Authorization": f"Bearer {token_b}"})
+        ids_a = [i["id"] for i in list_a.json()]
+        ids_b = [i["id"] for i in list_b.json()]
+        assert ids_a.count(shared_id) == 1
+        assert ids_b.count(shared_id) == 1
+
+        status_a = client.put(
+            f"/instances/{shared_id}/clients/1/status",
+            json={"status": "entregado"},
+            headers={"Authorization": f"Bearer {token_a}"},
+        )
+        assert status_a.status_code == 200
+
+        sol_b_after = client.get(f"/solutions/{shared_id}", headers={"Authorization": f"Bearer {token_b}"})
+        assert sol_b_after.status_code == 200
+
+    def test_orphan_instance_without_account_not_visible_to_any_account(self):
+        """Bug real: instancias con account_id NULL (legacy, de antes de que
+        existiera multi-tenancy) se trataban como accesibles por CUALQUIER
+        cuenta vía "OR account_id IS NULL" en load_instance/list_instances —
+        cualquier cuenta nueva veía y podía abrir clientes/direcciones/
+        teléfonos de instancias huérfanas de otras cuentas/tests."""
+        from backend_python.persistence.postgres_adapter import PostgreSQLAdapter
+
+        client = self._client()
+        token = self._register_owner(client, "Orphan Visibility Co")
+
+        orphan_id = f"orphan-{uuid.uuid4().hex[:8]}"
+        adapter = PostgreSQLAdapter()
+        cursor = adapter.conn.cursor()
+        try:
+            cursor.execute(
+                "INSERT INTO instancias (id, depot_x, depot_y, account_id) VALUES (%s, %s, %s, NULL)",
+                [orphan_id, 0.0, 0.0],
+            )
+            cursor.execute(
+                "INSERT INTO flota_config (instancia_id, num_vehicles, capacity) VALUES (%s, %s, %s)",
+                [orphan_id, 1, 100],
+            )
+            adapter.conn.commit()
+        finally:
+            cursor.close()
+
+        try:
+            list_response = client.get("/instances", headers={"Authorization": f"Bearer {token}"})
+            assert orphan_id not in [i["id"] for i in list_response.json()]
+
+            solution_response = client.get(f"/solutions/{orphan_id}", headers={"Authorization": f"Bearer {token}"})
+            assert solution_response.status_code == 404
+        finally:
+            cleanup_cursor = adapter.conn.cursor()
+            cleanup_cursor.execute("DELETE FROM instancias WHERE id = %s", [orphan_id])
+            adapter.conn.commit()
+            cleanup_cursor.close()

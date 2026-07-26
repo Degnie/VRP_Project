@@ -3,19 +3,20 @@
 import uuid
 from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Dict, Any, Tuple, Optional
 import logging
 
 from backend_python.config import get_config
 from backend_python.models import Coordinate, Cliente, Deposito, Flota, Instancia
 from backend_python.service.solver_orchestrator import solve_instance
-from backend_python.persistence.postgres_adapter import PostgreSQLAdapter
+from backend_python.persistence.postgres_adapter import PostgreSQLAdapter, psycopg2
 from backend_python.persistence.mongodb_adapter import MongoDBAdapter
 from backend_python.auth import create_access_token, hash_password, verify_password
-from backend_python.auth.dependencies import CurrentUser, get_current_user, require_role
+from backend_python.auth.dependencies import CurrentUser, get_current_user, require_role, set_pg_adapter
 from backend_python.auth.models import (
-    CreateUserRequest, LoginRequest, RegisterRequest, TokenResponse, UserOut,
+    CreateUserRequest, LoginRequest, RegisterRequest, SetUserActiveRequest,
+    TeamMemberOut, TokenResponse, UserOut,
 )
 from backend_python.api.export import build_route_pdf
 
@@ -23,18 +24,65 @@ from backend_python.api.export import build_route_pdf
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# --- Namespacing de instancia_id por cuenta ---
+#
+# instancia_id es elegido libremente por el usuario en el formulario (el
+# default es literalmente "instancia-1" para todos). La tabla `instancias`
+# lo usa como PRIMARY KEY global (no compuesta con account_id), y el mismo
+# patrón `ON CONFLICT (id) DO UPDATE` se repite en flota_config/clientes —
+# sin este namespacing, dos cuentas distintas que resuelven sin cambiar el
+# ID por defecto se pisan silenciosamente los datos de flota/clientes entre
+# sí (bug real encontrado en producción de pruebas). En vez de migrar la PK
+# a compuesta (reescribir 4 tablas y sus FKs), se namespacea el ID real que
+# se persiste como f"{account_id}:{instancia_id}" en el borde de cada
+# endpoint — el usuario nunca ve el prefijo, todos los adapters (Postgres y
+# Mongo) siguen recibiendo un string opaco sin cambiar ninguna firma.
+_NAMESPACE_SEP = ":"
+
+
+def _namespaced_id(account_id: str, instancia_id: str) -> str:
+    return f"{account_id}{_NAMESPACE_SEP}{instancia_id}"
+
+
+def _strip_namespace(account_id: str, namespaced_id: str) -> str:
+    prefix = f"{account_id}{_NAMESPACE_SEP}"
+    return namespaced_id[len(prefix):] if namespaced_id.startswith(prefix) else namespaced_id
+
 
 # Pydantic models
 class ContactInfo(BaseModel):
-    """Datos de contacto de un cliente — opcionales, no los usa el solver."""
-    customer_name: Optional[str] = None
-    customer_phone: Optional[str] = None
-    address: Optional[str] = None
+    """Datos de contacto de un cliente — opcionales, no los usa el solver.
+
+    max_length coincide con las columnas reales (customer_name VARCHAR(255),
+    address VARCHAR(500)) — sin esto, un valor demasiado largo pasaba Pydantic
+    sin quejarse, el solve corría igual, y recién explotaba en save_instance
+    con un psycopg2.errors.StringDataRightTruncation sin capturar, devolviendo
+    un 500 genérico sin indicar qué falló ni si la solución quedó guardada.
+    """
+    customer_name: Optional[str] = Field(default=None, max_length=255)
+    customer_phone: Optional[str] = Field(default=None, max_length=50)
+    address: Optional[str] = Field(default=None, max_length=500)
+
+
+def _validate_lng_lat_pairs(pairs: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+    for lng, lat in pairs:
+        if not (-180 <= lng <= 180) or not (-90 <= lat <= 90):
+            raise ValueError(
+                f"Coordenada fuera de rango: ({lng}, {lat}) — longitud debe estar entre "
+                "-180 y 180, latitud entre -90 y 90"
+            )
+    return pairs
 
 
 class InstanceRequest(BaseModel):
     """Request para resolver una instancia."""
-    instancia_id: str
+    # 200: la columna real es VARCHAR(255), pero el id se namespacea como
+    # f"{account_id}:{instancia_id}" antes de persistir — el margen deja
+    # espacio de sobra para el prefijo de account_id (~37 chars) sin
+    # acercarse al límite real de la columna. Sin esto, un instancia_id
+    # largo pasaba Pydantic y explotaba en save_instance con un 500 genérico
+    # (mismo patrón que ContactInfo sin max_length, Ronda 29).
+    instancia_id: str = Field(max_length=200)
     coordinates: List[Tuple[float, float]]  # [(x1, y1), (x2, y2), ...]
     demands: List[float]
     num_vehicles: int
@@ -46,6 +94,21 @@ class InstanceRequest(BaseModel):
     # Mismo índice que coordinates/demands; None o lista más corta es válido
     # (contactos ausentes para ese cliente).
     contacts: Optional[List[Optional[ContactInfo]]] = None
+
+    # Sin este chequeo, una coordenada fuera de rango (typo de tecla, dato mal
+    # importado) pasaba el 200 del /solve y recién explotaba en el frontend:
+    # MapLibre lanza "Invalid LngLat" al intentar centrar el mapa en la
+    # solución, y como no hay Error Boundary en la app, esa excepción tumbaba
+    # el árbol de React entero — pantalla en blanco sin ningún mensaje.
+    @field_validator("coordinates")
+    @classmethod
+    def _validate_coordinates(cls, v: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+        return _validate_lng_lat_pairs(v)
+
+    @field_validator("depot_coordinates")
+    @classmethod
+    def _validate_depot(cls, v: Tuple[float, float]) -> Tuple[float, float]:
+        return _validate_lng_lat_pairs([v])[0]
 
 
 class SolutionResponse(BaseModel):
@@ -62,13 +125,23 @@ class InstanceSummary(BaseModel):
     num_clients: int
     num_vehicles: int
     capacity: float
+    created_at: Optional[str] = None
 
 
 class VehicleTypeRequest(BaseModel):
-    """Request para crear/editar un tipo de vehículo del catálogo."""
-    name: str
-    weight_capacity_kg: float
-    volume_capacity_m3: float
+    """Request para crear/editar un tipo de vehículo del catálogo.
+
+    id: opcional, generado por el cliente (crypto.randomUUID() en el
+    frontend). Si se manda, el backend lo usa tal cual en vez de generar uno
+    propio — el frontend arma la fila optimista con este id antes de que la
+    request termine (el usuario puede seguir tecleando mientras el POST está
+    en vuelo), así que si el backend devolviera un id distinto, la respuesta
+    stale terminaba reemplazando cualquier edición hecha en el medio.
+    """
+    id: Optional[str] = None
+    name: str = Field(max_length=255)
+    weight_capacity_kg: float = Field(gt=0)
+    volume_capacity_m3: float = Field(gt=0)
     tolerance_margin: float = 0.9
 
 
@@ -91,12 +164,43 @@ class CoverageZoneOut(BaseModel):
     points: List[Tuple[float, float]]
 
 
-DELIVERY_STATUSES = ("pendiente", "entregado", "no_encontrado", "reprogramado")
+DELIVERY_STATUSES = ("pendiente", "entregado", "no_encontrado", "reprogramado", "rechazado")
+
+# "reprogramado" solo debe llegar a través de POST /instances/{id}/reschedule (que
+# setea rescheduled_to_instancia_id vía mark_clients_rescheduled) — nunca por esta vía
+# manual. Setearlo acá dejaba clientes huérfanos: bloqueados por el guard de 409 en
+# cualquier edición futura, y excluidos de get_pending_clients, así que tampoco volvían
+# a ser candidatos a una reprogramación real.
+MANUALLY_SETTABLE_DELIVERY_STATUSES = ("pendiente", "entregado", "no_encontrado", "rechazado")
 
 
 class DeliveryStatusRequest(BaseModel):
     """Request para actualizar el estado de entrega de un cliente."""
     status: str
+    note: Optional[str] = None
+
+
+class UpdateClientRequest(BaseModel):
+    """Corrige los datos de un cliente ya persistido (ej. error de tipeo en
+    el CSV importado) sin tener que re-resolver la instancia entera desde
+    cero — eso perdía los estados de entrega ya marcados ese día."""
+    x: float
+    y: float
+    # Opcional: editar solo contacto/ubicación no debería obligar al caller a
+    # conocer/retransmitir la demanda actual del cliente — si se omite, el
+    # endpoint preserva la que ya está persistida.
+    demand: Optional[float] = Field(default=None, gt=0)
+    customer_name: Optional[str] = Field(default=None, max_length=255)
+    customer_phone: Optional[str] = Field(default=None, max_length=50)
+    address: Optional[str] = Field(default=None, max_length=500)
+
+    @field_validator("x", "y")
+    @classmethod
+    def _validate_coordinate(cls, v: float, info) -> float:
+        lo, hi = (-180, 180) if info.field_name == "x" else (-90, 90)
+        if not (lo <= v <= hi):
+            raise ValueError(f"{info.field_name} fuera de rango válido ({lo} a {hi})")
+        return v
 
 
 class AssignmentsRequest(BaseModel):
@@ -104,11 +208,18 @@ class AssignmentsRequest(BaseModel):
     assignments: Dict[int, str]  # {vehicle_id: repartidor_user_id}
 
 
+class DeliveryStatusEntry(BaseModel):
+    """Estado de entrega + nota de un cliente, para hidratar la UI de dueño/operario."""
+    status: str
+    note: Optional[str] = None
+
+
 class RouteStop(BaseModel):
     """Parada de la ruta de un repartidor, con estado de entrega."""
     client_id: int
     sequence: int
     delivery_status: str
+    delivery_note: Optional[str] = None
     customer_name: Optional[str] = None
     customer_phone: Optional[str] = None
     address: Optional[str] = None
@@ -162,6 +273,8 @@ def create_app() -> FastAPI:
     except Exception as e:
         logger.warning(f"PostgreSQL connection failed: {e}")
 
+    set_pg_adapter(pg_adapter)
+
     try:
         mongo_adapter = MongoDBAdapter(config.MONGO_URL)
         logger.info("MongoDB connected")
@@ -172,10 +285,10 @@ def create_app() -> FastAPI:
     def register(request: RegisterRequest):
         """Crea una cuenta (negocio) nueva + su primer usuario, con rol dueño."""
         if not pg_adapter:
-            raise HTTPException(status_code=503, detail="PostgreSQL unavailable")
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
 
         if pg_adapter.get_user_by_email(request.email):
-            raise HTTPException(status_code=400, detail="Email already registered")
+            raise HTTPException(status_code=400, detail="Ese email ya está registrado")
 
         account_id = str(uuid.uuid4())
         user_id = str(uuid.uuid4())
@@ -185,9 +298,16 @@ def create_app() -> FastAPI:
                 user_id, account_id, request.email,
                 hash_password(request.password), "dueño", request.full_name,
             )
+        except psycopg2.errors.UniqueViolation:
+            # El chequeo de arriba (get_user_by_email) no cierra la ventana
+            # de carrera: dos registros con el mismo email casi simultáneos
+            # pueden pasar ambos ese chequeo antes de que cualquiera haga el
+            # INSERT — el segundo choca acá contra el UNIQUE de la columna.
+            # Sin este catch específico, caía al 500 genérico de abajo.
+            raise HTTPException(status_code=400, detail="Ese email ya está registrado")
         except Exception as e:
             logger.error(f"Register error: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Error interno del servidor")
 
         token = create_access_token(user_id, account_id, "dueño")
         return TokenResponse(access_token=token, role="dueño", account_id=account_id)
@@ -196,11 +316,11 @@ def create_app() -> FastAPI:
     def login(request: LoginRequest):
         """Autentica un usuario existente y devuelve un JWT."""
         if not pg_adapter:
-            raise HTTPException(status_code=503, detail="PostgreSQL unavailable")
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
 
         user = pg_adapter.get_user_by_email(request.email)
         if not user or not user["active"] or not verify_password(request.password, user["password_hash"]):
-            raise HTTPException(status_code=401, detail="Invalid email or password")
+            raise HTTPException(status_code=401, detail="Email o contraseña inválidos")
 
         token = create_access_token(user["id"], user["account_id"], user["role"])
         return TokenResponse(access_token=token, role=user["role"], account_id=user["account_id"])
@@ -212,13 +332,13 @@ def create_app() -> FastAPI:
     ):
         """Dueño/operario crea un usuario nuevo (operario o repartidor) en su misma cuenta."""
         if not pg_adapter:
-            raise HTTPException(status_code=503, detail="PostgreSQL unavailable")
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
 
         if request.role == "dueño" and current_user.role != "dueño":
-            raise HTTPException(status_code=403, detail="Only an owner can create another owner")
+            raise HTTPException(status_code=403, detail="Solo un dueño puede crear a otro dueño")
 
         if pg_adapter.get_user_by_email(request.email):
-            raise HTTPException(status_code=400, detail="Email already registered")
+            raise HTTPException(status_code=400, detail="Ese email ya está registrado")
 
         user_id = str(uuid.uuid4())
         try:
@@ -226,9 +346,15 @@ def create_app() -> FastAPI:
                 user_id, current_user.account_id, request.email,
                 hash_password(request.password), request.role, request.full_name,
             )
+        except psycopg2.errors.UniqueViolation:
+            # Mismo caso que en /auth/register: dos invitaciones al mismo
+            # email casi simultáneas (ej. dos operarios invitando al mismo
+            # repartidor) pueden pasar el chequeo de arriba antes de que
+            # cualquiera de las dos inserte.
+            raise HTTPException(status_code=400, detail="Ese email ya está registrado")
         except Exception as e:
             logger.error(f"Create user error: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Error interno del servidor")
 
         return UserOut(
             id=user_id, account_id=current_user.account_id, email=request.email,
@@ -239,22 +365,56 @@ def create_app() -> FastAPI:
     def me(current_user: CurrentUser = Depends(get_current_user)):
         """Datos del usuario autenticado (decodificados del token)."""
         if not pg_adapter:
-            raise HTTPException(status_code=503, detail="PostgreSQL unavailable")
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
 
         user = pg_adapter.get_user_by_id(current_user.user_id)
         if not user:
-            raise HTTPException(status_code=404, detail="User not found")
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
         return UserOut(
             id=user["id"], account_id=user["account_id"], email=user["email"],
             role=user["role"], full_name=user["full_name"],
         )
 
+    @app.get("/auth/users", response_model=List[TeamMemberOut])
+    def list_team(current_user: CurrentUser = Depends(require_role("dueño", "operario"))):
+        """Equipo (usuarios) de la cuenta del usuario autenticado."""
+        if not pg_adapter:
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
+        users = pg_adapter.list_users_by_account(current_user.account_id)
+        return [TeamMemberOut(**u) for u in users]
+
+    @app.patch("/auth/users/{user_id}", response_model=TeamMemberOut)
+    def set_user_active(
+        user_id: str,
+        request: SetUserActiveRequest,
+        current_user: CurrentUser = Depends(require_role("dueño", "operario")),
+    ):
+        """Activa/desactiva un usuario de la cuenta. Un usuario no puede desactivarse a sí mismo."""
+        if not pg_adapter:
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
+        if user_id == current_user.user_id:
+            raise HTTPException(status_code=400, detail="No podés desactivarte a vos mismo")
+
+        target = pg_adapter.get_user_by_id(user_id)
+        if target and target["account_id"] == current_user.account_id and target["role"] == "dueño" and current_user.role != "dueño":
+            raise HTTPException(status_code=403, detail="Solo un dueño puede desactivar a otro dueño")
+
+        updated = pg_adapter.set_user_active(user_id, current_user.account_id, request.active)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+        user = pg_adapter.get_user_by_id(user_id)
+        return TeamMemberOut(
+            id=user["id"], email=user["email"], role=user["role"],
+            full_name=user["full_name"], active=user["active"],
+        )
+
     @app.get("/vehicle-catalog", response_model=List[VehicleTypeOut])
     def list_vehicle_catalog(current_user: CurrentUser = Depends(get_current_user)):
         """Catálogo de vehículos de la cuenta del usuario autenticado."""
         if not pg_adapter:
-            raise HTTPException(status_code=503, detail="PostgreSQL unavailable")
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
         types = pg_adapter.list_vehicle_types(current_user.account_id)
         return [VehicleTypeOut(**t) for t in types]
 
@@ -265,17 +425,24 @@ def create_app() -> FastAPI:
     ):
         """Crea un tipo de vehículo nuevo en el catálogo de la cuenta."""
         if not pg_adapter:
-            raise HTTPException(status_code=503, detail="PostgreSQL unavailable")
-        vehicle_id = str(uuid.uuid4())
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
+        vehicle_id = request.id or str(uuid.uuid4())
         try:
             pg_adapter.create_vehicle_type(
                 vehicle_id, current_user.account_id, request.name,
                 request.weight_capacity_kg, request.volume_capacity_m3, request.tolerance_margin,
             )
+        except psycopg2.errors.UniqueViolation:
+            # El id es opcional y lo genera el cliente (crypto.randomUUID())
+            # para UI optimista — un reintento de red normal del navegador
+            # (o doble click) puede reenviar el mismo POST con el mismo id
+            # antes de recibir la respuesta del primero, chocando contra la
+            # PK. Mismo patrón que el TOCTOU de email en /auth/register.
+            raise HTTPException(status_code=409, detail="Ya existe un vehículo con ese id")
         except Exception as e:
             logger.error(f"Create vehicle type error: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error")
-        return VehicleTypeOut(id=vehicle_id, **request.model_dump())
+            raise HTTPException(status_code=500, detail="Error interno del servidor")
+        return VehicleTypeOut(id=vehicle_id, **request.model_dump(exclude={"id"}))
 
     @app.put("/vehicle-catalog/{vehicle_id}", response_model=VehicleTypeOut)
     def update_vehicle_catalog_entry(
@@ -285,7 +452,7 @@ def create_app() -> FastAPI:
     ):
         """Edita un tipo de vehículo existente (solo si pertenece a la cuenta del usuario)."""
         if not pg_adapter:
-            raise HTTPException(status_code=503, detail="PostgreSQL unavailable")
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
         try:
             updated = pg_adapter.update_vehicle_type(
                 vehicle_id, current_user.account_id, request.name,
@@ -293,10 +460,10 @@ def create_app() -> FastAPI:
             )
         except Exception as e:
             logger.error(f"Update vehicle type error: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Error interno del servidor")
         if not updated:
-            raise HTTPException(status_code=404, detail="Vehicle type not found")
-        return VehicleTypeOut(id=vehicle_id, **request.model_dump())
+            raise HTTPException(status_code=404, detail="Tipo de vehículo no encontrado")
+        return VehicleTypeOut(id=vehicle_id, **request.model_dump(exclude={"id"}))
 
     @app.delete("/vehicle-catalog/{vehicle_id}", status_code=204)
     def delete_vehicle_catalog_entry(
@@ -305,20 +472,20 @@ def create_app() -> FastAPI:
     ):
         """Elimina un tipo de vehículo del catálogo de la cuenta."""
         if not pg_adapter:
-            raise HTTPException(status_code=503, detail="PostgreSQL unavailable")
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
         try:
             deleted = pg_adapter.delete_vehicle_type(vehicle_id, current_user.account_id)
         except Exception as e:
             logger.error(f"Delete vehicle type error: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Error interno del servidor")
         if not deleted:
-            raise HTTPException(status_code=404, detail="Vehicle type not found")
+            raise HTTPException(status_code=404, detail="Tipo de vehículo no encontrado")
 
     @app.get("/coverage-zone", response_model=Optional[CoverageZoneOut])
     def get_coverage_zone_endpoint(current_user: CurrentUser = Depends(get_current_user)):
         """Zona de cobertura de la cuenta del usuario (null si no hay ninguna guardada)."""
         if not pg_adapter:
-            raise HTTPException(status_code=503, detail="PostgreSQL unavailable")
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
         points = pg_adapter.get_coverage_zone(current_user.account_id)
         if points is None:
             return None
@@ -331,14 +498,14 @@ def create_app() -> FastAPI:
     ):
         """Reemplaza el polígono de cobertura de la cuenta (uno solo por cuenta)."""
         if not pg_adapter:
-            raise HTTPException(status_code=503, detail="PostgreSQL unavailable")
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
         try:
             pg_adapter.set_coverage_zone(
                 current_user.account_id, [[p[0], p[1]] for p in request.points]
             )
         except Exception as e:
             logger.error(f"Set coverage zone error: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Error interno del servidor")
         return CoverageZoneOut(points=request.points)
 
     @app.delete("/coverage-zone", status_code=204)
@@ -347,12 +514,12 @@ def create_app() -> FastAPI:
     ):
         """Elimina la zona de cobertura de la cuenta."""
         if not pg_adapter:
-            raise HTTPException(status_code=503, detail="PostgreSQL unavailable")
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
         try:
             pg_adapter.delete_coverage_zone(current_user.account_id)
         except Exception as e:
             logger.error(f"Delete coverage zone error: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Error interno del servidor")
 
     @app.get("/health")
     def health():
@@ -367,19 +534,67 @@ def create_app() -> FastAPI:
             "mongodb": mongo_status
         }
 
+    def _solve_and_persist(instance: Instancia, account_id: str, log_label: str) -> SolutionResponse:
+        """Corre el pipeline NN→SA→3-opt sobre una Instancia ya construida,
+        persiste instancia+solución, y arma la respuesta. Compartido por
+        /solve (instancia armada desde el body) y
+        /instances/{id}/solve (instancia ya persistida, ej. tras reprogramar)."""
+        # Solve ANTES de persistir — save_instance ahora borra clientes
+        # obsoletos de una corrida anterior con el mismo instancia_id
+        # (Etapa de limpieza de huérfanos); si el solve fallara con la
+        # persistencia ya hecha, un payload rechazado (ej. sin clientes
+        # válidos) dejaría la ruta vieja borrada en la DB aunque la
+        # respuesta HTTP fuera un error — el dueño ve un 400 y asume que
+        # no pasó nada, pero la instancia ya quedó vacía. Solo se
+        # persiste si el solve realmente produjo una solución.
+        logger.info(f"Solving instance {log_label}")
+        solution = solve_instance(instance)
+
+        if pg_adapter:
+            if pg_adapter.save_instance(instance, account_id=account_id):
+                logger.info(f"Saved instance {log_label} to PostgreSQL")
+            else:
+                logger.warning(f"Failed to save instance {log_label} to PostgreSQL")
+
+            # Bug real: NN/SA puede recomponer completamente qué clientes
+            # caen en cada vehicle_id al re-resolver — las asignaciones
+            # repartidor↔vehicle_id de la corrida anterior quedaban vivas
+            # apuntando al mismo vehicle_id con una secuencia de paradas
+            # DISTINTA, sin ningún aviso. El repartidor seguía viendo "su"
+            # ruta (mismo vehicle_id) pero con clientes ajenos, pudiendo
+            # entregar pedidos equivocados. Se invalidan siempre tras
+            # cualquier re-solve — dueño/operario debe reasignar.
+            pg_adapter.set_route_assignments(instance.id, {})
+
+        if mongo_adapter:
+            if mongo_adapter.save_solution(solution, {"phase": "Phase 3", "status": "completed"}):
+                logger.info(f"Saved solution for {log_label} to MongoDB")
+            else:
+                logger.warning(f"Failed to save solution for {log_label} to MongoDB")
+
+        routes = [
+            {"vehicle_id": ruta.vehicle_id, "sequence": ruta.secuencia, "cost": ruta.costo}
+            for ruta in solution.rutas
+        ]
+        return SolutionResponse(
+            instancia_id=_strip_namespace(account_id, solution.instancia_id),
+            total_cost=solution.costo_total,
+            num_routes=len(solution.rutas),
+            routes=routes
+        )
+
     @app.post("/solve", response_model=SolutionResponse)
     def solve(
         request: InstanceRequest,
         current_user: CurrentUser = Depends(require_role("dueño", "operario")),
     ):
         """
-        Resuelve una instancia VRP.
+        Resuelve una instancia VRP a partir de coordenadas/flota enviadas en el body.
 
         Pipeline: NN → SA → 3-opt
         Persiste instancia en PostgreSQL, solución en MongoDB.
         """
         try:
-            # Build Instancia from request
             depot = Deposito(Coordinate(*request.depot_coordinates), "Depot")
             flota = Flota(
                 request.num_vehicles,
@@ -400,96 +615,106 @@ def create_app() -> FastAPI:
                 for i in range(len(request.coordinates))
             ]
 
+            # El id real que se persiste va namespaceado por cuenta — el usuario
+            # nunca ve esto, pero evita que dos cuentas distintas usando el mismo
+            # instancia_id (el default del form es literalmente "instancia-1"
+            # para todos) se pisen los datos de flota/clientes entre sí.
             instance = Instancia(
-                id=request.instancia_id,
+                id=_namespaced_id(current_user.account_id, request.instancia_id),
                 deposito=depot,
                 flota=flota,
                 clientes=clientes
             )
-
-            # Persist instance (PostgreSQL)
-            if pg_adapter:
-                if pg_adapter.save_instance(instance, account_id=current_user.account_id):
-                    logger.info(f"Saved instance {request.instancia_id} to PostgreSQL")
-                else:
-                    logger.warning(f"Failed to save instance {request.instancia_id} to PostgreSQL")
-
-            # Solve
-            logger.info(f"Solving instance {request.instancia_id}")
-            solution = solve_instance(instance)
-
-            # Persist solution (MongoDB)
-            if mongo_adapter:
-                if mongo_adapter.save_solution(solution, {"phase": "Phase 3", "status": "completed"}):
-                    logger.info(f"Saved solution for {request.instancia_id} to MongoDB")
-                else:
-                    logger.warning(f"Failed to save solution for {request.instancia_id} to MongoDB")
-
-            # Format response
-            routes = [
-                {
-                    "vehicle_id": ruta.vehicle_id,
-                    "sequence": ruta.secuencia,
-                    "cost": ruta.costo
-                }
-                for ruta in solution.rutas
-            ]
-
-            return SolutionResponse(
-                instancia_id=solution.instancia_id,
-                total_cost=solution.costo_total,
-                num_routes=len(solution.rutas),
-                routes=routes
-            )
+            return _solve_and_persist(instance, current_user.account_id, request.instancia_id)
 
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
             logger.error(f"Solve error: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Error interno del servidor")
 
-    @app.get("/instances", response_model=List[InstanceSummary])
-    def list_instances(current_user: CurrentUser = Depends(get_current_user)):
-        """Lista instancias persistidas en PostgreSQL, de la cuenta del usuario."""
+    @app.post("/instances/{instancia_id}/solve", response_model=SolutionResponse)
+    def solve_existing_instance(
+        instancia_id: str,
+        current_user: CurrentUser = Depends(require_role("dueño", "operario")),
+    ):
+        """Resuelve una instancia YA persistida (ej. la creada por
+        /instances/{id}/reschedule), sin requerir retransmitir coordenadas y
+        flota a mano — antes era imposible re-resolver una reprogramación
+        desde la UI, porque /solve solo aceptaba una instancia armada
+        completa en el body."""
         if not pg_adapter:
-            raise HTTPException(status_code=503, detail="PostgreSQL unavailable")
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
+
+        namespaced_id = _namespaced_id(current_user.account_id, instancia_id)
+        instance = pg_adapter.load_instance(namespaced_id, account_id=current_user.account_id)
+        if not instance:
+            raise HTTPException(status_code=404, detail="Instancia no encontrada")
+        if not instance.clientes:
+            raise HTTPException(status_code=400, detail="La instancia no tiene clientes para resolver")
 
         try:
-            instance_ids = pg_adapter.list_instances(account_id=current_user.account_id)
-            summaries = []
+            return _solve_and_persist(instance, current_user.account_id, instancia_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            logger.error(f"Solve error: {e}")
+            raise HTTPException(status_code=500, detail="Error interno del servidor")
 
-            for inst_id in instance_ids:
-                inst = pg_adapter.load_instance(inst_id, account_id=current_user.account_id)
-                if inst:
-                    summaries.append(InstanceSummary(
-                        id=inst.id,
-                        num_clients=len(inst.clientes),
-                        num_vehicles=inst.flota.num_vehiculos,
-                        capacity=inst.flota.capacidad_por_vehiculo
-                    ))
+    @app.get("/instances", response_model=List[InstanceSummary])
+    def list_instances(
+        assigned_only: bool = False,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        """Lista instancias de la cuenta del usuario.
 
-            return summaries
+        Con assigned_only=true y rol repartidor, filtra a solo las instancias
+        donde tiene una ruta asignada (route_assignments) — evita que vea el
+        ID técnico de instancias ajenas en su selector.
+        """
+        if not pg_adapter:
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
+
+        try:
+            repartidor_user_id = (
+                current_user.user_id if assigned_only and current_user.role == "repartidor" else None
+            )
+            rows = pg_adapter.list_instance_summaries(
+                current_user.account_id, repartidor_user_id=repartidor_user_id
+            )
+            return [
+                InstanceSummary(
+                    id=_strip_namespace(current_user.account_id, row["id"]),
+                    num_clients=row["num_clients"],
+                    num_vehicles=row["num_vehicles"],
+                    capacity=row["capacity"],
+                    created_at=row["created_at"],
+                )
+                for row in rows
+            ]
 
         except Exception as e:
             logger.error(f"List instances error: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Error interno del servidor")
 
     @app.get("/solutions/{instancia_id}", response_model=SolutionResponse)
     def get_solution(instancia_id: str, current_user: CurrentUser = Depends(get_current_user)):
         """Recupera solución más reciente para una instancia de la cuenta del usuario."""
         if not mongo_adapter:
-            raise HTTPException(status_code=503, detail="MongoDB unavailable")
+            raise HTTPException(status_code=503, detail="MongoDB no disponible")
+
+        namespaced_id = _namespaced_id(current_user.account_id, instancia_id)
 
         # La solución vive en Mongo sin account_id propio — la pertenencia se
         # valida a través de la instancia en Postgres (que sí lo tiene).
-        if pg_adapter and not pg_adapter.load_instance(instancia_id, account_id=current_user.account_id):
-            raise HTTPException(status_code=404, detail="Solution not found")
+        if pg_adapter and not pg_adapter.load_instance(namespaced_id, account_id=current_user.account_id):
+            raise HTTPException(status_code=404, detail="Solución no encontrada")
 
         try:
-            solution = mongo_adapter.load_solution(instancia_id)
+            solution = mongo_adapter.load_solution(namespaced_id)
 
             if not solution:
-                raise HTTPException(status_code=404, detail="Solution not found")
+                raise HTTPException(status_code=404, detail="Solución no encontrada")
 
             routes = [
                 {
@@ -501,7 +726,7 @@ def create_app() -> FastAPI:
             ]
 
             return SolutionResponse(
-                instancia_id=solution.instancia_id,
+                instancia_id=_strip_namespace(current_user.account_id, solution.instancia_id),
                 total_cost=solution.costo_total,
                 num_routes=len(solution.rutas),
                 routes=routes
@@ -511,7 +736,7 @@ def create_app() -> FastAPI:
             raise
         except Exception as e:
             logger.error(f"Get solution error: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Error interno del servidor")
 
     @app.get("/solutions/{instancia_id}/export.pdf")
     def export_solution_pdf(
@@ -521,20 +746,40 @@ def create_app() -> FastAPI:
     ):
         """Hoja de ruta en PDF — una página por vehículo, o solo la de `vehicle_id`."""
         if not pg_adapter:
-            raise HTTPException(status_code=503, detail="PostgreSQL unavailable")
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
         if not mongo_adapter:
-            raise HTTPException(status_code=503, detail="MongoDB unavailable")
+            raise HTTPException(status_code=503, detail="MongoDB no disponible")
 
-        instance = pg_adapter.load_instance(instancia_id, account_id=current_user.account_id)
+        namespaced_id = _namespaced_id(current_user.account_id, instancia_id)
+
+        instance = pg_adapter.load_instance(namespaced_id, account_id=current_user.account_id)
         if not instance:
-            raise HTTPException(status_code=404, detail="Solution not found")
+            raise HTTPException(status_code=404, detail="Solución no encontrada")
 
-        solution = mongo_adapter.load_solution(instancia_id)
+        # Un repartidor solo puede descargar la hoja de SU propia ruta — sin
+        # esto, cualquiera con un token de repartidor podía pedir el PDF de
+        # cualquier vehículo de la cuenta (o todos, sin vehicle_id) y ver
+        # nombre/teléfono/dirección de clientes de rutas ajenas, sin tener
+        # ninguna asignación. Mismo guard que ya existe en
+        # update_delivery_status, aplicado acá también.
+        if current_user.role == "repartidor":
+            assigned_vehicle = pg_adapter.get_assigned_vehicle_for_repartidor(namespaced_id, current_user.user_id)
+            if assigned_vehicle is None:
+                raise HTTPException(status_code=403, detail="No tenés una ruta asignada en esta instancia")
+            vehicle_id = assigned_vehicle
+
+        solution = mongo_adapter.load_solution(namespaced_id)
         if not solution:
-            raise HTTPException(status_code=404, detail="Solution not found")
+            raise HTTPException(status_code=404, detail="Solución no encontrada")
 
         clientes_by_id = {c.id: c for c in instance.clientes}
-        pdf_bytes = build_route_pdf(solution, clientes_by_id, vehicle_id=vehicle_id)
+        delivery_statuses = pg_adapter.get_client_delivery_statuses(namespaced_id)
+        rescheduled_client_ids = {
+            cid for cid, status in delivery_statuses.items() if status.get("status") == "reprogramado"
+        }
+        pdf_bytes = build_route_pdf(
+            solution, clientes_by_id, vehicle_id=vehicle_id, rescheduled_client_ids=rescheduled_client_ids
+        )
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
@@ -551,20 +796,24 @@ def create_app() -> FastAPI:
         """Marca el estado de entrega de un pedido. Dueño/operario: cualquiera de
         su cuenta. Repartidor: solo pedidos de su propia ruta asignada."""
         if not pg_adapter:
-            raise HTTPException(status_code=503, detail="PostgreSQL unavailable")
-        if request.status not in DELIVERY_STATUSES:
-            raise HTTPException(status_code=422, detail=f"status debe ser uno de {DELIVERY_STATUSES}")
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
+        if request.status not in MANUALLY_SETTABLE_DELIVERY_STATUSES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"status debe ser uno de {MANUALLY_SETTABLE_DELIVERY_STATUSES}",
+            )
 
-        instance = pg_adapter.load_instance(instancia_id, account_id=current_user.account_id)
+        namespaced_id = _namespaced_id(current_user.account_id, instancia_id)
+        instance = pg_adapter.load_instance(namespaced_id, account_id=current_user.account_id)
         if not instance:
-            raise HTTPException(status_code=404, detail="Instance not found")
+            raise HTTPException(status_code=404, detail="Instancia no encontrada")
 
         if current_user.role == "repartidor":
-            assigned_vehicle = pg_adapter.get_assigned_vehicle_for_repartidor(instancia_id, current_user.user_id)
+            assigned_vehicle = pg_adapter.get_assigned_vehicle_for_repartidor(namespaced_id, current_user.user_id)
             if assigned_vehicle is None:
                 raise HTTPException(status_code=403, detail="No tenés una ruta asignada en esta instancia")
             if mongo_adapter:
-                solution = mongo_adapter.load_solution(instancia_id)
+                solution = mongo_adapter.load_solution(namespaced_id)
                 own_ruta = next(
                     (r for r in solution.rutas if r.vehicle_id == assigned_vehicle), None
                 ) if solution else None
@@ -573,12 +822,138 @@ def create_app() -> FastAPI:
         elif current_user.role not in ("dueño", "operario"):
             raise HTTPException(status_code=403, detail="Rol sin permiso")
 
+        current_statuses = pg_adapter.get_client_delivery_statuses(namespaced_id)
+        current_entry = current_statuses.get(cliente_id)
+        if current_entry is None:
+            raise HTTPException(status_code=404, detail="Cliente no encontrado")
+        if current_entry["status"] == "reprogramado":
+            raise HTTPException(
+                status_code=409,
+                detail="Este pedido ya fue reprogramado a otra instancia, no se puede modificar acá",
+            )
+
         updated = pg_adapter.update_client_delivery_status(
-            instancia_id, cliente_id, request.status, current_user.user_id
+            namespaced_id, cliente_id, request.status, current_user.user_id, request.note
         )
         if not updated:
-            raise HTTPException(status_code=404, detail="Client not found")
-        return {"status": request.status}
+            raise HTTPException(status_code=404, detail="Cliente no encontrado")
+        return {"status": request.status, "note": request.note}
+
+    @app.patch("/instances/{instancia_id}/clients/{cliente_id}")
+    def update_client(
+        instancia_id: str,
+        cliente_id: int,
+        request: UpdateClientRequest,
+        current_user: CurrentUser = Depends(require_role("dueño", "operario")),
+    ):
+        """Corrige nombre/teléfono/dirección/coordenadas de un cliente ya
+        cargado — antes la única forma de arreglar un error de tipeo (ej. en
+        el CSV importado) era re-resolver la instancia entera desde cero,
+        perdiendo los estados de entrega ya marcados ese día."""
+        if not pg_adapter:
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
+
+        namespaced_id = _namespaced_id(current_user.account_id, instancia_id)
+        instance = pg_adapter.load_instance(namespaced_id, account_id=current_user.account_id)
+        if not instance:
+            raise HTTPException(status_code=404, detail="Instancia no encontrada")
+
+        current_client = next((c for c in instance.clientes if c.id == cliente_id), None)
+        if not current_client:
+            raise HTTPException(status_code=404, detail="Cliente no encontrado")
+
+        current_statuses = pg_adapter.get_client_delivery_statuses(namespaced_id)
+        if current_statuses.get(cliente_id, {}).get("status") == "reprogramado":
+            raise HTTPException(
+                status_code=409,
+                detail="Este pedido ya fue reprogramado a otra instancia, no se puede editar acá",
+            )
+
+        # model_fields_set distingue "el caller no mandó este campo" (preservar
+        # lo persistido) de "lo mandó explícitamente vacío" (borrarlo a
+        # propósito) — sin esto, editar solo la coordenada desde un formulario
+        # que no tenía el contacto cargado (ej. `contacts` en null tras una
+        # reprogramación) blanqueaba nombre/teléfono/dirección en silencio.
+        fields_set = request.model_fields_set
+        demand = request.demand if "demand" in fields_set else current_client.demanda
+        customer_name = request.customer_name if "customer_name" in fields_set else current_client.customer_name
+        customer_phone = request.customer_phone if "customer_phone" in fields_set else current_client.customer_phone
+        address = request.address if "address" in fields_set else current_client.address
+
+        updated = pg_adapter.update_client(
+            namespaced_id, cliente_id,
+            request.x, request.y, demand,
+            customer_name, customer_phone, address,
+        )
+        if not updated:
+            raise HTTPException(status_code=404, detail="Cliente no encontrado")
+        return {"id": cliente_id, "x": request.x, "y": request.y, "demand": demand}
+
+    @app.delete("/instances/{instancia_id}")
+    def delete_instance_endpoint(
+        instancia_id: str,
+        current_user: CurrentUser = Depends(require_role("dueño", "operario")),
+    ):
+        """Elimina una instancia (de prueba, duplicada, o creada por error) y
+        todo lo dependiente (clientes, flota, asignaciones — ON DELETE
+        CASCADE). Antes no había forma de sacarla de la lista: quedaba
+        visible para siempre en GET /instances."""
+        if not pg_adapter:
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
+
+        namespaced_id = _namespaced_id(current_user.account_id, instancia_id)
+        try:
+            deleted = pg_adapter.delete_instance(namespaced_id, account_id=current_user.account_id)
+        except psycopg2.Error:
+            # Defensa en profundidad: la FK real que causaba esto
+            # (rescheduled_to_instancia_id) ya tiene ON DELETE SET NULL
+            # (migración 0008), pero cualquier otra dependencia futura hacia
+            # instancias.id sin CASCADE/SET NULL debe dar un error explicativo,
+            # no un 500 genérico sin manejar.
+            raise HTTPException(
+                status_code=409,
+                detail="No se pudo eliminar la instancia — todavía tiene datos dependientes.",
+            )
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Instancia no encontrada")
+        return {"deleted": True}
+
+    @app.get("/instances/{instancia_id}/delivery-statuses", response_model=Dict[int, DeliveryStatusEntry])
+    def get_delivery_statuses(
+        instancia_id: str,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        """Estado de entrega + nota de cada cliente de una instancia — hidrata
+        SolutionSummary con lo que ya se marcó (dueño/operario, o el repartidor
+        viendo su propia ruta) en vez de arrancar siempre en "pendiente"."""
+        if not pg_adapter:
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
+
+        namespaced_id = _namespaced_id(current_user.account_id, instancia_id)
+        if not pg_adapter.load_instance(namespaced_id, account_id=current_user.account_id):
+            raise HTTPException(status_code=404, detail="Instancia no encontrada")
+
+        statuses = pg_adapter.get_client_delivery_statuses(namespaced_id)
+        return {
+            client_id: DeliveryStatusEntry(status=entry["status"], note=entry["note"])
+            for client_id, entry in statuses.items()
+        }
+
+    @app.get("/instances/{instancia_id}/assignments", response_model=Dict[int, str])
+    def get_assignments(
+        instancia_id: str,
+        current_user: CurrentUser = Depends(require_role("dueño", "operario")),
+    ):
+        """Asignaciones repartidor↔vehículo ya guardadas — hidrata el selector
+        de SolutionSummary tras un reload en vez de mostrar siempre "Sin asignar"."""
+        if not pg_adapter:
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
+
+        namespaced_id = _namespaced_id(current_user.account_id, instancia_id)
+        if not pg_adapter.load_instance(namespaced_id, account_id=current_user.account_id):
+            raise HTTPException(status_code=404, detail="Instancia no encontrada")
+
+        return pg_adapter.get_route_assignments(namespaced_id)
 
     @app.put("/instances/{instancia_id}/assignments")
     def set_assignments(
@@ -588,50 +963,80 @@ def create_app() -> FastAPI:
     ):
         """Asigna un repartidor a cada vehicle_id de la instancia (reemplaza lo anterior)."""
         if not pg_adapter:
-            raise HTTPException(status_code=503, detail="PostgreSQL unavailable")
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
 
-        instance = pg_adapter.load_instance(instancia_id, account_id=current_user.account_id)
+        namespaced_id = _namespaced_id(current_user.account_id, instancia_id)
+        instance = pg_adapter.load_instance(namespaced_id, account_id=current_user.account_id)
         if not instance:
-            raise HTTPException(status_code=404, detail="Instance not found")
+            raise HTTPException(status_code=404, detail="Instancia no encontrada")
+
+        # Sin esto, un vehicle_id inventado (o de otra instancia) quedaba
+        # asignado igual — la fila de route_assignments no tiene FK contra
+        # las rutas reales de la solución, así que el repartidor asignado
+        # jamás vería nada en su vista y la asignación quedaría huérfana en
+        # silencio. Se valida contra las rutas de la solución ya resuelta.
+        solution = mongo_adapter.load_solution(namespaced_id) if mongo_adapter else None
+        if solution:
+            valid_vehicle_ids = {ruta.vehicle_id for ruta in solution.rutas}
+            for vehicle_id in request.assignments:
+                if vehicle_id not in valid_vehicle_ids:
+                    raise HTTPException(status_code=422, detail=f"vehicle_id inválido para esta solución: {vehicle_id}")
 
         for repartidor_user_id in request.assignments.values():
             user = pg_adapter.get_user_by_id(repartidor_user_id)
             if not user or user["account_id"] != current_user.account_id:
                 raise HTTPException(status_code=422, detail=f"Usuario inválido: {repartidor_user_id}")
 
-        pg_adapter.set_route_assignments(instancia_id, request.assignments)
+        # get_assigned_vehicle_for_repartidor asume que un repartidor tiene
+        # A LO SUMO un vehicle_id por instancia (una sola ruta a la vez) —
+        # sin este chequeo, asignar al mismo repartidor a dos vehículos
+        # dejaba una de sus dos rutas invisible en "Mi ruta" (la query no
+        # tiene ORDER BY y devuelve una fila arbitraria), sin ningún error
+        # ni aviso ni para el dueño/operario ni para el repartidor.
+        seen_repartidores = set()
+        for repartidor_user_id in request.assignments.values():
+            if repartidor_user_id in seen_repartidores:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Un repartidor no puede estar asignado a más de un vehículo en la misma instancia",
+                )
+            seen_repartidores.add(repartidor_user_id)
+
+        pg_adapter.set_route_assignments(namespaced_id, request.assignments)
         return {"assignments": request.assignments}
 
     @app.get("/instances/{instancia_id}/my-route", response_model=MyRouteResponse)
     def get_my_route(instancia_id: str, current_user: CurrentUser = Depends(get_current_user)):
         """Ruta + estado de entrega del vehículo asignado al repartidor autenticado."""
         if not pg_adapter:
-            raise HTTPException(status_code=503, detail="PostgreSQL unavailable")
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
         if not mongo_adapter:
-            raise HTTPException(status_code=503, detail="MongoDB unavailable")
+            raise HTTPException(status_code=503, detail="MongoDB no disponible")
 
-        instance = pg_adapter.load_instance(instancia_id, account_id=current_user.account_id)
+        namespaced_id = _namespaced_id(current_user.account_id, instancia_id)
+        instance = pg_adapter.load_instance(namespaced_id, account_id=current_user.account_id)
         if not instance:
-            raise HTTPException(status_code=404, detail="Instance not found")
+            raise HTTPException(status_code=404, detail="Instancia no encontrada")
 
-        vehicle_id = pg_adapter.get_assigned_vehicle_for_repartidor(instancia_id, current_user.user_id)
+        vehicle_id = pg_adapter.get_assigned_vehicle_for_repartidor(namespaced_id, current_user.user_id)
         if vehicle_id is None:
             raise HTTPException(status_code=404, detail="No tenés una ruta asignada en esta instancia")
 
-        solution = mongo_adapter.load_solution(instancia_id)
+        solution = mongo_adapter.load_solution(namespaced_id)
         if not solution:
-            raise HTTPException(status_code=404, detail="Solution not found")
+            raise HTTPException(status_code=404, detail="Solución no encontrada")
         ruta = next((r for r in solution.rutas if r.vehicle_id == vehicle_id), None)
         if not ruta:
-            raise HTTPException(status_code=404, detail="Route not found")
+            raise HTTPException(status_code=404, detail="Ruta no encontrada")
 
         clientes_by_id = {c.id: c for c in instance.clientes}
-        statuses = pg_adapter.get_client_delivery_statuses(instancia_id)
+        statuses = pg_adapter.get_client_delivery_statuses(namespaced_id)
         stops = [
             RouteStop(
                 client_id=client_id,
                 sequence=i + 1,
-                delivery_status=statuses.get(client_id, "pendiente"),
+                delivery_status=statuses.get(client_id, {}).get("status", "pendiente"),
+                delivery_note=statuses.get(client_id, {}).get("note"),
                 customer_name=clientes_by_id[client_id].customer_name if client_id in clientes_by_id else None,
                 customer_phone=clientes_by_id[client_id].customer_phone if client_id in clientes_by_id else None,
                 address=clientes_by_id[client_id].address if client_id in clientes_by_id else None,
@@ -645,39 +1050,73 @@ def create_app() -> FastAPI:
         instancia_id: str,
         current_user: CurrentUser = Depends(require_role("dueño", "operario")),
     ):
-        """Crea una instancia nueva con los pedidos no entregados (pendiente/no_encontrado).
+        """Crea una instancia nueva con los pedidos no entregados (pendiente/no_encontrado/rechazado).
 
         Reusa el pipeline de /solve con la misma flota que tenía la instancia original.
         No recalcula automáticamente — el usuario dispara la reprogramación a mano.
         """
         if not pg_adapter:
-            raise HTTPException(status_code=503, detail="PostgreSQL unavailable")
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
 
-        instance = pg_adapter.load_instance(instancia_id, account_id=current_user.account_id)
+        namespaced_id = _namespaced_id(current_user.account_id, instancia_id)
+        instance = pg_adapter.load_instance(namespaced_id, account_id=current_user.account_id)
         if not instance:
-            raise HTTPException(status_code=404, detail="Instance not found")
+            raise HTTPException(status_code=404, detail="Instancia no encontrada")
 
-        pending = pg_adapter.get_pending_clients(instancia_id)
+        pending = pg_adapter.get_pending_clients(namespaced_id)
         if not pending:
             raise HTTPException(status_code=400, detail="No hay pedidos pendientes para reprogramar")
 
-        new_instancia_id = f"{instancia_id}-reprog-{uuid.uuid4().hex[:8]}"
+        # El sufijo -reprog-{...} se genera sobre el id visible (sin namespace)
+        # y luego se namespacea igual que cualquier instancia nueva — mantiene
+        # el mismo prefijo por cuenta que ya tiene la instancia original.
+        new_visible_id = f"{instancia_id}-reprog-{uuid.uuid4().hex[:8]}"
+        new_namespaced_id = _namespaced_id(current_user.account_id, new_visible_id)
+
+        # rescheduled_to_instancia_id tiene FK hacia instancias.id, así que la
+        # fila tiene que existir antes de que mark_clients_rescheduled pueda
+        # apuntarle — pero se crea VACÍA (0 clientes) a propósito: el set de
+        # clientes real recién se decide después de marcar atómicamente.
+        # mark_clients_rescheduled filtra por estado no-terminal en su propio
+        # WHERE, así que si dos reprogramaciones de la misma instancia corren
+        # casi al mismo tiempo, la segunda en llegar encuentra los clientes ya
+        # en 'reprogramado' y no los vuelve a mover — moved_ids solo trae los
+        # ids que ESTA llamada realmente logró apropiarse. Guardar la
+        # instancia nueva con el set completo de "pending" ANTES de este
+        # filtro (como se hacía antes) dejaba una instancia huérfana con
+        # clientes duplicados cuando dos requests perdían/ganaban la carrera
+        # — save_instance es idempotente (ON CONFLICT DO UPDATE), así que se
+        # llama de nuevo abajo con el contenido final ya correcto.
+        placeholder = Instancia(
+            id=new_namespaced_id, deposito=instance.deposito, flota=instance.flota, clientes=[],
+        )
+        pg_adapter.save_instance(placeholder, account_id=current_user.account_id)
+
+        pending_ids = [row["id"] for row in pending]
+        moved_ids = pg_adapter.mark_clients_rescheduled(namespaced_id, pending_ids, new_namespaced_id)
+        if not moved_ids:
+            # Esta request perdió la carrera — el placeholder vacío ya
+            # persistido no le pertenece a nadie (rescheduled_to_instancia_id
+            # de ningún cliente lo referencia, porque moved_ids está vacío),
+            # así que se borra para no dejarlo como instancia fantasma de 0
+            # clientes visible en GET /instances.
+            pg_adapter.delete_instance(new_namespaced_id, account_id=current_user.account_id)
+            raise HTTPException(status_code=409, detail="Estos pedidos ya fueron reprogramados por otra solicitud")
+
+        moved_ids_set = set(moved_ids)
         new_clientes = [
             Cliente(
                 id=row["id"], coordenada=Coordinate(row["x"], row["y"]), demanda=row["demand"],
                 customer_name=row["customer_name"], customer_phone=row["customer_phone"], address=row["address"],
             )
-            for row in pending
+            for row in pending if row["id"] in moved_ids_set
         ]
         new_instance = Instancia(
-            id=new_instancia_id, deposito=instance.deposito, flota=instance.flota, clientes=new_clientes,
+            id=new_namespaced_id, deposito=instance.deposito, flota=instance.flota, clientes=new_clientes,
         )
         pg_adapter.save_instance(new_instance, account_id=current_user.account_id)
 
-        cliente_ids = [row["id"] for row in pending]
-        pg_adapter.mark_clients_rescheduled(instancia_id, cliente_ids, new_instancia_id)
-
-        return RescheduleResponse(new_instancia_id=new_instancia_id, rescheduled_client_ids=cliente_ids)
+        return RescheduleResponse(new_instancia_id=new_visible_id, rescheduled_client_ids=moved_ids)
 
     @app.get("/")
     def root():

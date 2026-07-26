@@ -5,9 +5,11 @@ Conecta a PostgreSQL usando psycopg2 con connection pooling.
 """
 
 from typing import List, Optional
+import functools
 import json
 import logging
 import os
+import threading
 import time
 from backend_python.models import Instancia, Cliente, Coordinate, Deposito, Flota
 
@@ -27,6 +29,31 @@ logger = logging.getLogger(__name__)
 
 CONNECT_RETRIES = 3
 CONNECT_RETRY_DELAY_SECONDS = 1
+
+
+def _locked(method):
+    """Serializa el acceso a self.conn entre threads.
+
+    Los endpoints de FastAPI son `def` (síncronos) — Starlette los despacha a
+    un threadpool real, y varios requests concurrentes (ej. un repartidor
+    tocando 5 paradas casi al mismo tiempo) terminan ejecutando cursor/
+    execute/commit/rollback sobre la MISMA conexión psycopg2 en threads
+    distintos. psycopg2 no es thread-safe para eso: los statements se pueden
+    intercalar y un commit/rollback de un thread corta la transacción en
+    curso de otro, perdiendo su UPDATE en silencio (sin ninguna excepción
+    visible al cliente — bug real detectado con 5 PUT concurrentes perdiendo
+    2-3 de 5 escrituras). Un pool de conexiones sería la solución de fondo,
+    pero requiere gestionar conexión-por-request en cada endpoint; este lock
+    por instancia es el fix mínimo que preserva la corrección sin reescribir
+    el ciclo de vida de la conexión — serializa el acceso, no lo paraleliza,
+    aceptable dado el volumen de escrituras de esta app (no es un caso de
+    alto throughput).
+    """
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapper
 
 
 class PostgreSQLAdapter:
@@ -51,6 +78,7 @@ class PostgreSQLAdapter:
 
         self.connection_string = connection_string
         self.conn = None
+        self._lock = threading.Lock()
 
         if HAS_PSYCOPG2:
             last_error = None
@@ -67,6 +95,7 @@ class PostgreSQLAdapter:
                         time.sleep(CONNECT_RETRY_DELAY_SECONDS)
             raise ConnectionError(f"PostgreSQL connection failed after {CONNECT_RETRIES} attempts: {last_error}")
 
+    @_locked
     def save_instance(self, instance: Instancia, account_id: Optional[str] = None) -> bool:
         """
         Persist Instancia to PostgreSQL.
@@ -114,9 +143,32 @@ class PostgreSQLAdapter:
                 ]
             )
 
-            # Insert clientes
-            for client in instance.clientes:
-                cursor.execute(
+            # Borra clientes que ya no están en el payload nuevo — resolver
+            # la MISMA instancia con menos clientes que la corrida anterior
+            # (ej. el dueño corrige el archivo y saca 2 direcciones erróneas)
+            # dejaba esas filas viejas como basura permanente: el
+            # ON CONFLICT DO UPDATE de abajo solo toca los ids presentes en
+            # el payload actual, nunca borra los que sobran. Se excluyen los
+            # ids del payload actual del DELETE (en vez de un DELETE + INSERT
+            # sin condición) para no perder delivery_status/delivery_note ya
+            # marcados de los clientes que SÍ siguen — un DELETE total
+            # reiniciaría a 'pendiente' hasta pedidos ya entregados.
+            current_ids = [client.id for client in instance.clientes]
+            cursor.execute(
+                sql.SQL("DELETE FROM clientes WHERE instancia_id = %s AND NOT (id = ANY(%s))"),
+                [instance.id, current_ids],
+            )
+
+            # Insert clientes — executemany en vez de un execute() por fila:
+            # con instancias grandes (100-300+ clientes) el loop anterior
+            # hacía un roundtrip a Postgres por cliente, todo dentro de la
+            # sección crítica de @_locked — bloqueaba cualquier otra
+            # operación de Postgres del proceso (login, listar instancias,
+            # marcar una entrega) durante varios segundos mientras se
+            # guardaba una instancia grande. executemany de psycopg
+            # pipelinea los statements en un solo roundtrip de red.
+            if instance.clientes:
+                cursor.executemany(
                     sql.SQL("""
                         INSERT INTO clientes (id, instancia_id, demand, x, y, customer_name, customer_phone, address)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
@@ -129,15 +181,18 @@ class PostgreSQLAdapter:
                             address = EXCLUDED.address
                     """),
                     [
-                        client.id,
-                        instance.id,
-                        int(client.demanda),
-                        client.coordenada.x,
-                        client.coordenada.y,
-                        client.customer_name,
-                        client.customer_phone,
-                        client.address,
-                    ]
+                        (
+                            client.id,
+                            instance.id,
+                            int(client.demanda),
+                            client.coordenada.x,
+                            client.coordenada.y,
+                            client.customer_name,
+                            client.customer_phone,
+                            client.address,
+                        )
+                        for client in instance.clientes
+                    ],
                 )
 
             self.conn.commit()
@@ -149,6 +204,7 @@ class PostgreSQLAdapter:
         finally:
             cursor.close()
 
+    @_locked
     def load_instance(self, instance_id: str, account_id: Optional[str] = None) -> Optional[Instancia]:
         """
         Load Instancia from PostgreSQL.
@@ -165,14 +221,23 @@ class PostgreSQLAdapter:
         cursor = self.conn.cursor()
         try:
             # Load instancia
+            #
+            # account_id IS NULL ya NO se trata como accesible por cualquier
+            # cuenta — ese fallback era para instancias creadas antes de que
+            # existiera multi-tenancy (0002_auth.py), pero hoy toda instancia
+            # nueva se crea siempre con account_id (todo pasa por endpoints
+            # autenticados). Mantenerlo abría una fuga cross-tenant real:
+            # cualquier cuenta nueva veía y podía abrir instancias huérfanas
+            # de otras cuentas (datos de clientes reales: nombre, teléfono,
+            # dirección), sin ninguna distinción visual de que no eran suyas.
             if account_id is not None:
                 cursor.execute(
-                    "SELECT depot_x, depot_y FROM instancias WHERE id = %s AND (account_id = %s OR account_id IS NULL)",
+                    "SELECT depot_x, depot_y, created_at FROM instancias WHERE id = %s AND account_id = %s",
                     [instance_id, account_id]
                 )
             else:
                 cursor.execute(
-                    "SELECT depot_x, depot_y FROM instancias WHERE id = %s",
+                    "SELECT depot_x, depot_y, created_at FROM instancias WHERE id = %s",
                     [instance_id]
                 )
             inst_row = cursor.fetchone()
@@ -211,13 +276,81 @@ class PostgreSQLAdapter:
                 for row in clientes_rows
             ]
 
-            return Instancia(instance_id, depot, flota, clientes)
+            created_at = inst_row[2].isoformat() if inst_row[2] else None
+            return Instancia(instance_id, depot, flota, clientes, created_at=created_at)
 
         except psycopg2.Error:
             return None
         finally:
             cursor.close()
 
+    @_locked
+    def delete_instance(self, instance_id: str, account_id: Optional[str] = None) -> bool:
+        """Borra una instancia y sus filas dependientes (clientes, flota_config,
+        route_assignments tienen ON DELETE CASCADE hacia instancias.id;
+        clientes.rescheduled_to_instancia_id tiene ON DELETE SET NULL — ver
+        migración 0008, bug real: sin esto, borrar una instancia intermedia de
+        una cadena de reprogramación A->B->C violaba esa FK con un 500 sin
+        manejar, porque los clientes de A seguían apuntando a B).
+
+        Usado para limpiar el placeholder que reschedule_instance crea antes
+        de marcar clientes atómicamente — si pierde la carrera de una
+        reprogramación concurrente (moved_ids vacío), la instancia vacía no
+        debe quedar visible en GET /instances como basura fantasma.
+        """
+        if self.conn is None:
+            return False
+        cursor = self.conn.cursor()
+        try:
+            if account_id is not None:
+                cursor.execute(
+                    "DELETE FROM instancias WHERE id = %s AND account_id = %s",
+                    [instance_id, account_id],
+                )
+            else:
+                cursor.execute("DELETE FROM instancias WHERE id = %s", [instance_id])
+            deleted = cursor.rowcount > 0
+            self.conn.commit()
+            return deleted
+        except psycopg2.Error:
+            self.conn.rollback()
+            raise
+        finally:
+            cursor.close()
+
+    @_locked
+    def update_client(
+        self, instance_id: str, client_id: int,
+        x: float, y: float, demand: float,
+        customer_name: Optional[str], customer_phone: Optional[str], address: Optional[str],
+    ) -> bool:
+        """Corrige los datos de un cliente ya persistido (ej. error de tipeo
+        en la dirección/teléfono de un CSV) sin tener que re-resolver toda
+        la instancia desde cero — antes la única forma de arreglar un solo
+        campo era re-subir toda la instancia, perdiendo los estados de
+        entrega ya marcados ese día vía el flujo de "sobreescribir"."""
+        if self.conn is None:
+            return False
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                """
+                UPDATE clientes SET x=%s, y=%s, demand=%s,
+                    customer_name=%s, customer_phone=%s, address=%s
+                WHERE id=%s AND instancia_id=%s
+                """,
+                [x, y, demand, customer_name, customer_phone, address, client_id, instance_id],
+            )
+            updated = cursor.rowcount > 0
+            self.conn.commit()
+            return updated
+        except psycopg2.Error:
+            self.conn.rollback()
+            raise
+        finally:
+            cursor.close()
+
+    @_locked
     def list_instances(self, account_id: Optional[str] = None) -> List[str]:
         """List stored instance IDs, optionally scoped to one account."""
         if self.conn is None:
@@ -227,12 +360,71 @@ class PostgreSQLAdapter:
         try:
             if account_id is not None:
                 cursor.execute(
-                    "SELECT id FROM instancias WHERE account_id = %s OR account_id IS NULL ORDER BY created_at DESC",
+                    "SELECT id FROM instancias WHERE account_id = %s ORDER BY created_at DESC",
                     [account_id],
                 )
             else:
                 cursor.execute("SELECT id FROM instancias ORDER BY created_at DESC")
             return [row[0] for row in cursor.fetchall()]
+        except psycopg2.Error:
+            return []
+        finally:
+            cursor.close()
+
+    @_locked
+    def list_instance_summaries(
+        self, account_id: str, repartidor_user_id: Optional[str] = None
+    ) -> List[dict]:
+        """Resumen (id, num_clients, num_vehicles, capacity, created_at) de cada
+        instancia de la cuenta en un solo query agregado — evita el N+1 de
+        llamar load_instance() (que trae clientes completos) por cada fila
+        solo para exponer un conteo en GET /instances.
+
+        Si repartidor_user_id se pasa, filtra a solo las instancias con una
+        ruta asignada a ese repartidor (mismo alcance que
+        list_instances_assigned_to, sin el N+1 posterior).
+        """
+        if self.conn is None:
+            return []
+        cursor = self.conn.cursor()
+        try:
+            if repartidor_user_id is not None:
+                cursor.execute(
+                    """
+                    SELECT i.id, COUNT(DISTINCT c.id), f.num_vehicles, f.capacity, i.created_at
+                    FROM instancias i
+                    JOIN route_assignments ra ON ra.instancia_id = i.id AND ra.repartidor_user_id = %s
+                    JOIN flota_config f ON f.instancia_id = i.id
+                    LEFT JOIN clientes c ON c.instancia_id = i.id
+                    WHERE i.account_id = %s
+                    GROUP BY i.id, f.num_vehicles, f.capacity, i.created_at
+                    ORDER BY i.created_at DESC
+                    """,
+                    [repartidor_user_id, account_id],
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT i.id, COUNT(DISTINCT c.id), f.num_vehicles, f.capacity, i.created_at
+                    FROM instancias i
+                    JOIN flota_config f ON f.instancia_id = i.id
+                    LEFT JOIN clientes c ON c.instancia_id = i.id
+                    WHERE i.account_id = %s
+                    GROUP BY i.id, f.num_vehicles, f.capacity, i.created_at
+                    ORDER BY i.created_at DESC
+                    """,
+                    [account_id],
+                )
+            return [
+                {
+                    "id": row[0],
+                    "num_clients": row[1],
+                    "num_vehicles": row[2],
+                    "capacity": row[3],
+                    "created_at": row[4].isoformat() if row[4] else None,
+                }
+                for row in cursor.fetchall()
+            ]
         except psycopg2.Error:
             return []
         finally:
@@ -245,6 +437,7 @@ class PostgreSQLAdapter:
 
     # --- Auth: accounts + users (Etapa 0b) ---
 
+    @_locked
     def create_account(self, account_id: str, name: str) -> bool:
         if self.conn is None:
             return False
@@ -262,6 +455,7 @@ class PostgreSQLAdapter:
         finally:
             cursor.close()
 
+    @_locked
     def create_user(
         self, user_id: str, account_id: str, email: str, password_hash: str,
         role: str, full_name: Optional[str] = None,
@@ -285,6 +479,7 @@ class PostgreSQLAdapter:
         finally:
             cursor.close()
 
+    @_locked
     def get_user_by_email(self, email: str) -> Optional[dict]:
         if self.conn is None:
             return None
@@ -308,6 +503,7 @@ class PostgreSQLAdapter:
         finally:
             cursor.close()
 
+    @_locked
     def get_user_by_id(self, user_id: str) -> Optional[dict]:
         if self.conn is None:
             return None
@@ -331,8 +527,48 @@ class PostgreSQLAdapter:
         finally:
             cursor.close()
 
+    @_locked
+    def list_users_by_account(self, account_id: str) -> List[dict]:
+        if self.conn is None:
+            return []
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT id, email, role, full_name, active FROM users "
+                "WHERE account_id = %s ORDER BY created_at",
+                [account_id],
+            )
+            return [
+                {"id": row[0], "email": row[1], "role": row[2], "full_name": row[3], "active": row[4]}
+                for row in cursor.fetchall()
+            ]
+        except psycopg2.Error:
+            return []
+        finally:
+            cursor.close()
+
+    @_locked
+    def set_user_active(self, user_id: str, account_id: str, active: bool) -> bool:
+        if self.conn is None:
+            return False
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                sql.SQL("UPDATE users SET active=%s WHERE id=%s AND account_id=%s"),
+                [active, user_id, account_id],
+            )
+            updated = cursor.rowcount > 0
+            self.conn.commit()
+            return updated
+        except psycopg2.Error:
+            self.conn.rollback()
+            raise
+        finally:
+            cursor.close()
+
     # --- Catálogo de vehículos + zona de cobertura (Etapa 1) ---
 
+    @_locked
     def create_vehicle_type(
         self, vehicle_id: str, account_id: str, name: str,
         weight_capacity_kg: float, volume_capacity_m3: float, tolerance_margin: float,
@@ -357,6 +593,7 @@ class PostgreSQLAdapter:
         finally:
             cursor.close()
 
+    @_locked
     def list_vehicle_types(self, account_id: str) -> List[dict]:
         if self.conn is None:
             return []
@@ -379,6 +616,7 @@ class PostgreSQLAdapter:
         finally:
             cursor.close()
 
+    @_locked
     def update_vehicle_type(
         self, vehicle_id: str, account_id: str, name: str,
         weight_capacity_kg: float, volume_capacity_m3: float, tolerance_margin: float,
@@ -404,6 +642,7 @@ class PostgreSQLAdapter:
         finally:
             cursor.close()
 
+    @_locked
     def delete_vehicle_type(self, vehicle_id: str, account_id: str) -> bool:
         if self.conn is None:
             return False
@@ -422,6 +661,7 @@ class PostgreSQLAdapter:
         finally:
             cursor.close()
 
+    @_locked
     def get_coverage_zone(self, account_id: str) -> Optional[List[List[float]]]:
         if self.conn is None:
             return None
@@ -443,6 +683,7 @@ class PostgreSQLAdapter:
         finally:
             cursor.close()
 
+    @_locked
     def set_coverage_zone(self, account_id: str, points: List[List[float]]) -> bool:
         if self.conn is None:
             return False
@@ -465,6 +706,7 @@ class PostgreSQLAdapter:
         finally:
             cursor.close()
 
+    @_locked
     def delete_coverage_zone(self, account_id: str) -> bool:
         if self.conn is None:
             return False
@@ -482,6 +724,7 @@ class PostgreSQLAdapter:
 
     # --- Ciclo de vida de pedido (Etapa 4) ---
 
+    @_locked
     def set_route_assignments(self, instancia_id: str, assignments: dict) -> bool:
         """Reemplaza las asignaciones repartidor↔vehicle_id de una instancia.
 
@@ -508,6 +751,7 @@ class PostgreSQLAdapter:
         finally:
             cursor.close()
 
+    @_locked
     def get_route_assignments(self, instancia_id: str) -> dict:
         """Devuelve {vehicle_id: repartidor_user_id} para una instancia."""
         if self.conn is None:
@@ -524,6 +768,7 @@ class PostgreSQLAdapter:
         finally:
             cursor.close()
 
+    @_locked
     def get_assigned_vehicle_for_repartidor(self, instancia_id: str, repartidor_user_id: str) -> Optional[int]:
         """vehicle_id asignado a un repartidor en una instancia, o None si no tiene ninguno."""
         if self.conn is None:
@@ -541,20 +786,28 @@ class PostgreSQLAdapter:
         finally:
             cursor.close()
 
+    @_locked
     def update_client_delivery_status(
         self, instancia_id: str, cliente_id: int, status: str, updated_by_user_id: str,
+        note: Optional[str] = None,
     ) -> bool:
+        # 'reprogramado' es un estado terminal real: el pedido ya vive como
+        # cliente nuevo en otra instancia (rescheduled_to_instancia_id) — sin
+        # este filtro, alguien con la ruta vieja todavía abierta (ej. un
+        # repartidor que no refrescó) podía marcar "entregado" acá, dejando
+        # un registro falso en la instancia vieja mientras el pedido real
+        # sigue pendiente en la instancia nueva, sin ningún aviso.
         if self.conn is None:
             return False
         cursor = self.conn.cursor()
         try:
             cursor.execute(
                 sql.SQL("""
-                    UPDATE clientes SET delivery_status = %s,
+                    UPDATE clientes SET delivery_status = %s, delivery_note = %s,
                         delivery_updated_at = CURRENT_TIMESTAMP, delivery_updated_by = %s
-                    WHERE id = %s AND instancia_id = %s
+                    WHERE id = %s AND instancia_id = %s AND delivery_status != 'reprogramado'
                 """),
-                [status, updated_by_user_id, cliente_id, instancia_id],
+                [status, note, updated_by_user_id, cliente_id, instancia_id],
             )
             updated = cursor.rowcount > 0
             self.conn.commit()
@@ -565,31 +818,33 @@ class PostgreSQLAdapter:
         finally:
             cursor.close()
 
+    @_locked
     def get_client_delivery_statuses(self, instancia_id: str) -> dict:
-        """Devuelve {cliente_id: delivery_status} para todos los clientes de una instancia."""
+        """Devuelve {cliente_id: {"status": ..., "note": ...}} para los clientes de una instancia."""
         if self.conn is None:
             return {}
         cursor = self.conn.cursor()
         try:
             cursor.execute(
-                "SELECT id, delivery_status FROM clientes WHERE instancia_id = %s",
+                "SELECT id, delivery_status, delivery_note FROM clientes WHERE instancia_id = %s",
                 [instancia_id],
             )
-            return {int(row[0]): row[1] for row in cursor.fetchall()}
+            return {int(row[0]): {"status": row[1], "note": row[2]} for row in cursor.fetchall()}
         except psycopg2.Error:
             return {}
         finally:
             cursor.close()
 
+    @_locked
     def get_pending_clients(self, instancia_id: str) -> List[dict]:
-        """Clientes no-terminales (pendiente o no_encontrado) de una instancia — insumo de reschedule."""
+        """Clientes no-terminales (pendiente, no_encontrado o rechazado) de una instancia — insumo de reschedule."""
         if self.conn is None:
             return []
         cursor = self.conn.cursor()
         try:
             cursor.execute(
                 "SELECT id, demand, x, y, customer_name, customer_phone, address "
-                "FROM clientes WHERE instancia_id = %s AND delivery_status IN ('pendiente', 'no_encontrado')",
+                "FROM clientes WHERE instancia_id = %s AND delivery_status IN ('pendiente', 'no_encontrado', 'rechazado')",
                 [instancia_id],
             )
             return [
@@ -604,20 +859,34 @@ class PostgreSQLAdapter:
         finally:
             cursor.close()
 
-    def mark_clients_rescheduled(self, instancia_id: str, cliente_ids: List[int], new_instancia_id: str) -> bool:
+    @_locked
+    def mark_clients_rescheduled(self, instancia_id: str, cliente_ids: List[int], new_instancia_id: str) -> List[int]:
+        """Marca como 'reprogramado' solo los clientes que TODAVÍA están en un
+        estado no-terminal — el filtro de estado en el WHERE (no solo en el
+        SELECT previo de get_pending_clients) es lo que evita la doble
+        reprogramación concurrente: si dos requests leen el mismo set de
+        pendientes y corren casi al mismo tiempo, la segunda en llegar acá ya
+        no encuentra 'pendiente/no_encontrado/rechazado' en esas filas (la
+        primera ya las puso en 'reprogramado') y su UPDATE no las toca —
+        devuelve solo los ids que esta llamada realmente movió, para que el
+        caller arme la instancia nueva únicamente con esos.
+        """
         if self.conn is None:
-            return False
+            return []
         cursor = self.conn.cursor()
         try:
             cursor.execute(
                 sql.SQL("""
                     UPDATE clientes SET delivery_status = 'reprogramado', rescheduled_to_instancia_id = %s
                     WHERE instancia_id = %s AND id = ANY(%s)
+                        AND delivery_status IN ('pendiente', 'no_encontrado', 'rechazado')
+                    RETURNING id
                 """),
                 [new_instancia_id, instancia_id, cliente_ids],
             )
+            moved_ids = [row[0] for row in cursor.fetchall()]
             self.conn.commit()
-            return True
+            return moved_ids
         except psycopg2.Error:
             self.conn.rollback()
             raise

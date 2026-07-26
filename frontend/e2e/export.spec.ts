@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { loginFreshAccount } from "./helpers";
+import fs from "node:fs/promises";
 
 test.beforeEach(async ({ page }) => {
   await loginFreshAccount(page);
@@ -33,6 +34,28 @@ test("exporta CSV con la hoja de ruta resuelta", async ({ page }) => {
   await page.getByRole("button", { name: "Exportar CSV" }).click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toMatch(/^ruta_.*\.csv$/);
+});
+
+test("exportar CSV tras editar un cliente incluye el dato nuevo, no el original", async ({ page }) => {
+  // Bug real (Ronda 41, operario): el botón "Exportar CSV" armaba el archivo
+  // con la prop `contacts` (snapshot original de App.tsx), no con
+  // `localContacts` (el estado que SÍ se actualiza al editar un cliente con
+  // ClientEditControl) — la lista en pantalla mostraba el dato editado
+  // correctamente, pero el CSV descargado traía el nombre/teléfono/dirección
+  // VIEJOS, justo el caso de uso para el que existe el botón "Editar".
+  await solveSmallInstance(page);
+
+  await page.locator(".btn-tertiary", { hasText: "Editar" }).first().click();
+  await page.getByLabel("Nombre", { exact: true }).fill("Nombre Corregido");
+  await page.getByRole("button", { name: "Guardar", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Guardar", exact: true })).not.toBeVisible();
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Exportar CSV" }).click();
+  const download = await downloadPromise;
+  const csvPath = await download.path();
+  const csvContent = await fs.readFile(csvPath!, "utf-8");
+  expect(csvContent).toContain("Nombre Corregido");
 });
 
 test("exporta PDF con la hoja de ruta resuelta", async ({ page }) => {
