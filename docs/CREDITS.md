@@ -229,9 +229,9 @@ Si utilizas este solver en investigación, favor citar:
 ```bibtex
 @software{vrp_solver_2026,
   title={VRP Solver — Hybrid Python/C++ Production Architecture},
-  author={Grupo de Investigación, UNMSM},
+  author={Degnie},
   year={2026},
-  url={https://github.com/usuario/vrp_solver},
+  url={https://github.com/Degnie/VRP_Project},
   note={Built on ideas from Vroom, PyVRP, LKH, VeRyPy, jsprit, and others}
 }
 ```

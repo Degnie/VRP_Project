@@ -2,7 +2,7 @@
 
 **Migración a Producción: Arquitectura Híbrida Python/C++ con Orquestación Inteligente**
 
-**Equipo:** Grupo de 3 integrantes | **Docente:** GUERRA GRADOS, Luis Angel  
+**Equipo:** Degnie | **Docente:** GUERRA GRADOS, Luis Angel  
 **Institución:** EP: Ciencia de la Computación — UNMSM  
 **Fase:** Proyecto Final Académico (Completado) → **Escalado a Producción (Vigente)**
 
@@ -212,7 +212,7 @@ Este proyecto es de **uso libre** bajo licencia [MIT/Apache 2.0 — pendiente de
 
 ## 👥 Autores
 
-- **Grupo de 3 integrantes** — Desarrollo y arquitectura
+- **Degnie** — Desarrollo y arquitectura
 - **Docente:** GUERRA GRADOS, Luis Angel — Supervisión académica
 - **Comunidad Open Source** — Referencias y benchmarking
 
