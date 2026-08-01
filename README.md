@@ -76,6 +76,8 @@ vrp_project/
 └── .gitignore
 ```
 
+> **Línea de corte (spec trazada):** desde el commit `chore: adopción del sistema completada — línea de corte` (`0.6.0`), rige el sistema de especificación trazada — `SPEC.md` es la fuente de verdad funcional, la suite está anotada con IDs de regla (`spec: RN-XXX`) y verificada con `make traceability`. El historial anterior a ese commit **no** tiene evidencia de ciclo TDD (test-antes-que-código, rojo/verde/refactor) porque esa disciplina no regía todavía — ver `docs/plan-adopcion.md` sección 6. No auditar el código histórico buscando ese ciclo.
+
 ### Principios de Diseño
 
 - **YAGNI:** Sin abstracciones especulativas. Cada componente existe porque es necesario.

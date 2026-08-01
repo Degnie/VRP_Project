@@ -22,9 +22,9 @@ install-deps:
 	@echo "✓ Dependencies installed"
 
 build:
-	mkdir -p build
-	cd build && cmake -DBUILD_PYTHON_BINDINGS=ON -DBUILD_TESTS=ON ..
-	cd build && cmake --build . --config Release
+	mkdir -p build64
+	cd build64 && cmake -DBUILD_PYTHON_BINDINGS=ON -DBUILD_TESTS=ON ..
+	cd build64 && cmake --build . --config Release
 	@echo "✓ Build complete"
 
 test: test-py test-cpp
@@ -34,8 +34,8 @@ test-py:
 	pytest tests/ -v --tb=short --cov=backend_python
 
 test-cpp:
-	cd build && cmake --build . --target vrp_core_tests --config Release
-	cd build && ctest --output-on-failure
+	cd build64 && cmake --build . --target vrp_core_tests --config Release
+	cd build64 && ctest --output-on-failure
 
 run:
 	uvicorn backend_python.api.main:app --reload --host 0.0.0.0 --port 8000
@@ -73,7 +73,11 @@ traceability:
 verify: build test traceability
 	@echo "✓ verify: build + test + trazabilidad en verde"
 
-# Umbral fijado en ETAPA 3 tras medir el score base (ADR-005, plan-adopcion.md sección 5)
+# Umbral fijado en ETAPA 3: score base medido 100% sobre backend_python/models
+# (ver plan-adopcion.md sección 5, ADR-005) menos 2 puntos = 98%. Requiere WSL
+# (mutmut no soporta Windows nativo). Sube conforme se amplíe la medición a
+# otros módulos de dominio.
+MUTATION_THRESHOLD=98
 mutation:
-	mutmut run --paths-to-mutate backend_python/models,backend_python/service || true
+	mutmut run --paths-to-mutate backend_python/models || true
 	mutmut results

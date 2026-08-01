@@ -25,8 +25,8 @@ def extract_annotated_ids() -> set[str]:
     found = set()
     for test_file in (ROOT / "tests").rglob("*.py"):
         text = test_file.read_text(encoding="utf-8")
-        for match in re.finditer(r"spec:\s*((?:RN|CU|EC|RNF)(?:-[A-Z]+)?-\d+)", text):
-            found.add(match.group(1))
+        for line in re.finditer(r"spec:\s*(.+)", text):
+            found.update(ID_PATTERN.findall(line.group(1)))
     return found
 
 

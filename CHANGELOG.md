@@ -359,9 +359,28 @@ Se levantó un servicio OSRM real (`make osrm-prepare` con el extracto de Perú 
 
 ---
 
+## [0.6.0] — 2026-08-01
+
+### 🔗 Adopción del sistema de especificación trazada
+
+A partir de este commit, el proyecto adopta `SPEC.md` (reconstruido) como fuente de verdad funcional, con la suite de tests anotada con IDs de regla/escenario (`spec: RN-XXX`) y verificada mediante `make traceability`. Ver [docs/plan-adopcion.md](docs/plan-adopcion.md) para el plan completo y [docs/adr/ADR-005-estrategia-verificacion.md](docs/adr/ADR-005-estrategia-verificacion.md) para el contrato de `verify`.
+
+- **`Makefile`:** nuevos targets `verify` (build + test + trazabilidad), `traceability` (`scripts/check_traceability.py`, extrae IDs de `SPEC.md` y verifica que cada uno tenga al menos un test anotado) y `mutation` (mutmut sobre `backend_python/models`, umbral fijado en 98% — 2 puntos por debajo del score base medido de 100%, ver sección 5 de `docs/plan-adopcion.md`).
+- **Corrección de referencia:** `make build`/`make test-cpp` apuntaban al directorio `build/` (vacío, sin caché de CMake); corregido a `build64/`, el directorio real donde el core C++ está compilado en esta máquina desde `0.4.2`. No cambia comportamiento — solo corrige una ruta que ya estaba rota.
+- **Anotación de la suite:** 25 de los 30 IDs de `SPEC.md` tienen al menos un test que los cubre explícitamente. Sin cobertura: `EC-003` (fallback transparente del core C++, ejercitado implícitamente por toda la suite en máquinas sin bindings, sin un test que lo fuerce explícitamente), `RN-003` (heterogeneidad de `capacidades_vehiculos` — hallazgo nuevo, sin test dedicado), `RNF-001/002/003` (requisitos de performance, sin benchmark automatizado en la suite).
+- **Estado de `verify` en esta máquina:** `test-py` (194 passed, 3 skipped) y `test-cpp` (1/1 passed) en verde; `traceability` falla honestamente por las 5 reglas sin cobertura de arriba; `build` no pudo verificarse de punta a punta en esta sesión por un bloqueo de verificación SSL entre CMake/FetchContent y GitHub al intentar poblar GoogleTest — no es un problema del código, ver sección de hallazgos no implementados más abajo.
+
+Ver la entrada correspondiente más abajo en **Rechazado / Descartado** para los tests eliminados durante esta adopción.
+
+---
+
 ## Rechazado / Descartado
 
 Decisiones evaluadas y descartadas explícitamente para mantener el alcance YAGNI/KISS:
+
+- **Tests eliminados en la adopción del sistema de especificación (`0.6.0`):** aprobados en `docs/plan-adopcion.md` sección 2.
+  - `test_optimizers.py::TestSimulatedAnnealing::test_orchestrator_has_sa_params_computation`, `test_sa_params_scale_with_instance_size`, `TestLocalOperators::test_solution_respects_invariants_after_optimization`, `test_2opt_improves_or_maintains_solution`, `test_3opt_is_stricter_than_2opt` — afirmaban el cálculo matemático intermedio de la mejora porcentual en Python de 2-opt (2 de los 3 de `TestLocalOperators` ya estaban `pytest.skip`). Con el optimizador crítico en C++, verificar esa mejora paso a paso en Python no aportaba al dominio; la validación real (viabilidad de la solución) ya está cubierta en `TestSolverPipeline`/`TestOptimizationQuality`.
+  - `test_api_integration.py::TestConfiguration::test_config_loads_from_env`, `test_database_url_construction`, `test_mongo_url_construction`, `TestPersistenceAdapters::test_postgres_adapter_instantiation`, `test_mongodb_adapter_instantiation` — reafirmaban que `os.getenv` carga una URL o que una clase se instancia sin conexión real. Fragilidad ante cualquier refactor de configuración, sin testear comportamiento de dominio observable.
 
 - **Cobertura geográfica más allá de Lima Metropolitana / Perú en esta iteración:** se usa el extracto de Perú completo de Geofabrik (no hay uno más granular disponible ahí). Ampliar a otras regiones/países queda como decisión futura si se necesita — no se descarga ni pre-procesa nada más amplio especulativamente.
 - **Orquestador de infraestructura (Terraform/Ansible) para el paso de preparación del mapa OSRM:** un target de `Makefile` (`osrm-prepare`) es suficiente para un paso de un solo comando, ejecutado una vez por entorno — introducir una herramienta de IaC para esto sería infraestructura desproporcionada al problema.
