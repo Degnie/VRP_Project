@@ -15,6 +15,8 @@ from backend_python.auth import (
 
 
 class TestPasswordHashing:
+    """spec: RN-AUTH-001"""
+
     def test_hash_is_not_plaintext(self):
         assert hash_password("secreto123") != "secreto123"
 
@@ -28,6 +30,8 @@ class TestPasswordHashing:
 
 
 class TestJWT:
+    """spec: RN-AUTH-001"""
+
     def test_token_decodes_to_same_claims(self):
         token = create_access_token(user_id="u1", account_id="a1", role="dueño")
         payload = decode_access_token(token)

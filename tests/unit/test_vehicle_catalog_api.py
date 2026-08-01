@@ -14,6 +14,8 @@ POSTGRES_AVAILABLE = os.getenv("DATABASE_URL") is not None
 
 @pytest.mark.skipif(not POSTGRES_AVAILABLE, reason="PostgreSQL not configured")
 class TestVehicleCatalogAPI:
+    """spec: CU-CAT-001, RN-CAT-001, RN-CAT-002"""
+
     def _client(self):
         from fastapi.testclient import TestClient
         from backend_python.api import create_app

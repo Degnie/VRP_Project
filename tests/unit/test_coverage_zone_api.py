@@ -14,6 +14,8 @@ POSTGRES_AVAILABLE = os.getenv("DATABASE_URL") is not None
 
 @pytest.mark.skipif(not POSTGRES_AVAILABLE, reason="PostgreSQL not configured")
 class TestCoverageZoneAPI:
+    """spec: CU-COV-001, RN-COV-001"""
+
     def _client(self):
         from fastapi.testclient import TestClient
         from backend_python.api import create_app

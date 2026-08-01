@@ -1,6 +1,8 @@
 """
 Tests para persistencia: PostgreSQL + MongoDB.
 Valida CRUD operations y transacciones.
+
+spec: PENDIENTE
 """
 
 import pytest

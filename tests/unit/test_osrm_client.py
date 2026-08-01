@@ -2,6 +2,8 @@
 Tests para el cliente OSRM: matriz simple, chunking, y propagación de errores.
 Se activan solo si OSRM_URL está configurado y el servicio responde (mismo
 patrón skipif que test_persistence.py para Postgres/Mongo).
+
+spec: PENDIENTE
 """
 
 import os

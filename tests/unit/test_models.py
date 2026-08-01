@@ -11,7 +11,10 @@ from backend_python.models import (
 
 
 class TestCoordinate:
-    """Validación de coordenadas (x, y)."""
+    """Validación de coordenadas (x, y).
+
+    spec: RN-012
+    """
 
     def test_valid_coordinates(self):
         """Coordenadas positivas válidas."""
@@ -31,7 +34,10 @@ class TestCoordinate:
 
 
 class TestCliente:
-    """Validación de Cliente: demanda y ubicación."""
+    """Validación de Cliente: demanda y ubicación.
+
+    spec: RN-001
+    """
 
     def test_cliente_valid(self):
         """Cliente válido."""
@@ -72,7 +78,10 @@ class TestCliente:
 
 
 class TestDepositoFlota:
-    """Configuración del depósito y flota."""
+    """Configuración del depósito y flota.
+
+    spec: RN-012, RN-002
+    """
 
     def test_depot_valid(self):
         """Depósito válido."""
@@ -100,7 +109,10 @@ class TestDepositoFlota:
 
 
 class TestInstancia:
-    """Agregado: Instancia (depósito + flota + clientes)."""
+    """Agregado: Instancia (depósito + flota + clientes).
+
+    spec: RN-005, RN-006, RN-004
+    """
 
     def test_instancia_valid_simple(self):
         """Instancia válida con 2 clientes."""
@@ -178,7 +190,10 @@ class TestInstancia:
 
 
 class TestRuta:
-    """Ruta: secuencia de clientes para un vehículo."""
+    """Ruta: secuencia de clientes para un vehículo.
+
+    spec: RN-007, RN-008
+    """
 
     def test_ruta_valid(self):
         """Ruta válida."""
@@ -212,7 +227,10 @@ class TestRuta:
 
 
 class TestSolucion:
-    """Solución: conjunto de rutas con costo total."""
+    """Solución: conjunto de rutas con costo total.
+
+    spec: RN-009, RN-010, RN-011
+    """
 
     def test_solucion_valid(self):
         """Solución válida."""

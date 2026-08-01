@@ -21,6 +21,8 @@ def _clientes_by_id():
 
 
 class TestBuildRoutePdf:
+    """spec: CU-EXP-001, RN-EXP-001"""
+
     def test_produces_valid_pdf_bytes(self):
         pdf = build_route_pdf(_solution_with_two_vehicles(), _clientes_by_id())
         assert pdf.startswith(b"%PDF-")
