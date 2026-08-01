@@ -1,16 +1,34 @@
 # Estrategia de Pruebas (Testing Strategy)
 
+## 1. Principios Core
+* La especificación (`SPEC.md`) es la única fuente de verdad funcional. Cada test funcional debe mapear a una regla o escenario explícito.
+* **TDD-First a partir de la Adopción:** Todo código nuevo o modificado debe ser precedido por un test que falle.
+* **Aislamiento Condicional:** Las capas de integración (Base de Datos, OSRM) usan saltos explícitos (`skipif`) en ausencia de servicios, garantizando una suite verde para el desarrollador local sin afectar la cobertura real en CI (conforme al ADR-005).
+
+## 2. Tipos de Tests y Herramientas
+* **Unitarios (Python):** `pytest` para modelos de dominio, validación de reglas e invariantes.
+* **Unitarios (C++):** `GoogleTest / CTest` (`make test-cpp`) para la capa algorítmica nativa (`core_cpp`), matrices de costo y operadores de alto rendimiento.
+* **Integración:** `pytest` junto a `starlette.testclient.TestClient` para APIs, y contenedores Docker para adaptadores de persistencia y enrutamiento OSRM.
+
+## 3. Umbral de Cobertura y Mutación
+No se impone un umbral numérico estricto inicial aspiracional (ej. 90%). El enfoque es garantizar que:
+* **Todo lo que toca una regla de negocio debe tener un test funcional comprobable**.
+* Una vez medida la tolerancia de mutación de las pruebas actuales (Mutation Score), el umbral de CI se configurará **2 puntos por debajo** del score actual. El umbral crecerá manual y orgánicamente conforme se adopten prácticas TDD, asegurando que la calidad de la suite no empeore.
+
+## 4. Cuarentena y Tests Pendientes
+Los tests que verifican comportamiento técnico específico sin correlación a una regla de dominio, así como los tests nativos de C++ que son mecánicos/matemáticos, permanecerán en la suite marcados lógicamente como técnicos/pendientes de mapeo. No se tolera agregar tests que afirmen la implementación interna de los métodos ("sobre-especificación").
+
+---
+
+## 5. Reglas Históricas y Deuda Técnica (Post-Migración)
+
 > Reescrito para la arquitectura híbrida Python/C++ (post-migración, ver [CHANGELOG.md](../CHANGELOG.md) `0.1.0-alpha` en adelante). La versión anterior de este documento describía la GUI Qt/C++ académica; esa suite (`tests/test_core.cpp` + CTest) sigue existiendo en el árbol académico pero no es la suite activa de este SaaS.
 
-## 1. Cobertura Exigida
-
-* No se mide cobertura con una herramienta de coverage (no hay umbral numérico exigido por CI). La regla real es: **todo lo que toca una regla de negocio (validación de invariantes, cálculo de costos, persistencia) debe tener un test que falle si la regla se rompe**, no una métrica de porcentaje.
 * Núcleo algorítmico C++ (`core_cpp/`: `Graph`, `CostMatrix`, `NearestNeighbor`, `SimulatedAnnealing`, operadores 2-opt/Or-opt/3-opt): cubierto indirectamente vía los tests Python de `service.solver_orchestrator`, que ejercitan el pipeline completo (construcción → optimización → validación) tanto con bindings C++ activos como con el fallback puro Python.
 * Modelos de dominio Python (`backend_python/models.py`: `Coordinate`, `Cliente`, `Deposito`, `Flota`, `Instancia`, `Ruta`, `Solucion`): 100% de los invariantes declarados (demanda > 0, demanda entera, capacidad no excedida, IDs de cliente únicos, cada cliente visitado exactamente una vez) están cubiertos por `tests/unit/test_models.py` — incluye `test_cliente_demanda_debe_ser_entera` (`0.3.2`), regresión del invariante introducido en `0.3.1`.
 * Estado actual: 62 tests Python pasando (60 sin OSRM real levantado, +2 si `OSRM_URL` apunta a un servicio real), 3 skipped por diseño (2 dependen de que ambas bases de datos estén disponibles simultáneamente, 1 depende de bindings C++ compilados). Desde `0.4.2`, en esta máquina (con `MINGW_BIN_DIR` configurado en `.env.local`) la suite completa se ejecuta contra el pipeline C++ real, no solo el fallback. Desde `0.4.3`, existe además una suite C++ nativa (`core_cpp/tests/`, GoogleTest vía CTest): **10/10 tests pasando** (`vrp_core_tests.exe`).
 
-## 2. Estrategias por Capa
-
+### Estrategias por Capa
 * **Modelos de dominio (`backend_python/models.py`):** tests unitarios puros, sin I/O. Validan invariantes vía construcción (`dataclass` con `__post_init__` que lanza `ValueError`/`AssertionError`) — el test intenta construir un objeto inválido y espera la excepción.
 * **Orquestador (`backend_python/service/solver_orchestrator.py`):** tests de integración que resuelven instancias de ejemplo y verifican que la `Solucion` resultante sea válida (todos los clientes visitados, capacidad respetada, costo > 0). Corre igual con o sin bindings C++ compilados — si `vrp_solver` no está disponible, el orquestador cae automáticamente al fallback Python y los tests deben pasar en ambos modos. Desde `0.4.0`, la matriz de costos (`_build_cost_lookup()`) se construye una sola vez antes de esa bifurcación, garantizando que ambos caminos usen la misma fuente de distancias (OSRM o euclídea) — este es el mismo estándar de paridad, extendido a la fuente de datos, no solo al algoritmo.
 * **Cliente OSRM (`backend_python/service/osrm_client.py`):** tests de integración contra un servicio OSRM real (`osrm/osrm-backend` vía Docker, mapa pre-procesado con `make osrm-prepare`). Se activan solo si `OSRM_URL` está definida en el entorno; si no, se saltan (`skipif`) — mismo patrón exacto que Postgres/Mongo. El caso de host inalcanzable (`OSRMError` propagada) no depende de un servicio real y corre siempre.
@@ -18,8 +36,7 @@
 * **API REST (`backend_python/api/__init__.py`):** tests de integración vía `starlette.testclient.TestClient` sobre la app creada por `create_app()`, ejercitando los endpoints reales (`/solve`, `/instances`, `/solutions/{id}`, `/health`) contra las mismas DBs Docker.
 * **Núcleo C++ puro (`core_cpp/tests/`):** desde `0.4.3`, suite de tests C++ nativa (GoogleTest vía `FetchContent`, `add_test()` registrado en CTest) — `test_graph.cpp`, `test_cost_matrix.cpp`, `test_solution.cpp`. Se ejecuta con `cmake -DBUILD_TESTS=ON .. && cmake --build . && ctest --output-on-failure`. Complementa (no reemplaza) la validación indirecta vía los tests Python del orquestador, que siguen ejercitando los bindings pybind11 de punta a punta.
 
-## 3. Inyección de Fallos (Fault Injection)
-
+### Inyección de Fallos (Fault Injection)
 * **Directiva crítica: matrices de costo malformadas.** Como el núcleo asume grafos dirigidos con matrices de adyacencia asimétricas (ver [docs/adr/0002-asymmetric-cost-matrices.md](adr/0002-asymmetric-cost-matrices.md)), cualquier cambio a `CostMatrix` o a los builders/optimizers debe probarse con matrices intencionalmente malformadas: dimensiones inconsistentes, valores negativos, y sobre todo **matrices asimétricas reales** (`costo[i][j] != costo[j][i]`) para confirmar que ningún algoritmo asume `costo[i][j] == costo[j][i]` por accidente — ese es el bug de mayor impacto posible en este dominio, porque pasaría silenciosamente en instancias euclidianas simétricas y solo se manifestaría con datos reales (tráfico, calles de un solo sentido).
 * **Instancias inviables (demanda total > capacidad de flota):** `Instancia.__post_init__` valida esto en construcción y lanza excepción antes de llegar al solver — cubierto en `test_models.py`.
 * **Fallo de conexión a base de datos:** los adapters (`PostgreSQLAdapter`, `MongoDBAdapter`) reintentan la conexión inicial hasta 3 veces con 1 segundo de espera fija entre intentos (`0.3.6`) antes de lanzar `ConnectionError`, en vez de fallar en el primer intento. `PostgreSQLAdapter` usa `connect_timeout=5` explícito (añadido en `0.3.6` tras detectar que sin él un intento contra un host inalcanzable podía colgarse indefinidamente en Windows); `MongoDBAdapter` ya tenía `serverSelectionTimeoutMS=5000`. Verificado manualmente contra un puerto cerrado real para ambos adapters — ver CHANGELOG `0.3.6`.
@@ -30,8 +47,7 @@
 * **Colisión de ID cliente/depósito — protección añadida en `0.4.3`.** `Graph::add_node` ahora rastrea posiciones asignadas (`std::vector<bool> assigned`) y lanza `std::invalid_argument` ante un `id` duplicado, en vez de sobrescribir el nodo anterior en silencio. El fix de `0.3.1` (IDs de cliente desde `1` en `api/__init__.py`) sigue siendo el que evita la colisión en el único punto de entrada actual; este cambio añade una segunda capa de protección directamente en `Graph`, cerrando el vector de bug para cualquier caller futuro. Cubierto en `core_cpp/tests/test_graph.cpp::DuplicateIdRejected`.
 * **Depósito filtrado incorrectamente de `Ruta.secuencia` — corregido en `0.4.2`.** `_solve_cpp_pipeline` copiaba `cpp_route.sequence` (que incluye el depósito `id=0` al inicio/fin de cada ruta, patrón estándar del core C++) directo a `Ruta.secuencia` (que en el dominio Python representa solo clientes) — con 2+ rutas, `Solucion.__post_init__` rechazaba la solución completa como `"cliente visitado múltiples veces"` (el depósito aparecía repetido entre rutas). Bug de Fase 2, invisible hasta `0.4.2` porque el pipeline C++ nunca se había ejecutado (bindings no compilados). Ahora cubierto: toda la suite de `tests/integration/test_solver_end_to_end.py` y `tests/unit/test_optimizers.py` corre contra el pipeline C++ real en esta máquina.
 
-## 4. Decisiones Históricas y Deuda Técnica
-
+### Decisiones Históricas y Deuda Técnica
 * **Cola de mensajería para `/solve` asíncrono:** descartada. Ver CHANGELOG, sección "Rechazado / Descartado".
 * **ORM para el adapter de PostgreSQL:** descartado. Ver CHANGELOG, sección "Rechazado / Descartado".
 * **Retry/backoff en adapters de persistencia:** implementado en `0.3.6` (backoff fijo, 3 intentos, solo en conexión inicial) tras reconsiderar la decisión original de `0.3.0` tras el rechazo — el despliegue futuro en una máquina distinta a la actual hace que un fallo transitorio de red deje de ser hipotético. Ver CHANGELOG `0.3.6`.

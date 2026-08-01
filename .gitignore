@@ -60,5 +60,11 @@ CLAUDE.md
 .gemini/
 GEMINI.md
 
+# Agent-to-Agent communication bridge
+agent_bridge.md
+
 # graphify (regenerable knowledge graph output)
 graphify-out/
+
+# agent-workflow
+.agent-workflow/

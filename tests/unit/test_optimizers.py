@@ -176,6 +176,21 @@ class TestCostMatrixFallback:
         assert "Cost matrix: euclidiana (OSRM_URL no configurado)" in orchestrator.log
         assert len(cost_lookup) > 0
 
+    def test_solve_instance_reports_used_osrm_false_when_unavailable(self, medium_instance, monkeypatch):
+        """Bug real (Ronda 13, ciclo nuevo, dueño y operario, hallado
+        independientemente por ambos): solve_instance() descartaba el log del
+        orchestrator — el costo calculado con euclídea (por OSRM caído/no
+        configurado) se veía idéntico a uno con calles reales en la respuesta
+        de /solve, sin ningún flag que lo distinguiera."""
+        from backend_python.config import config as global_config
+        from backend_python.service.solver_orchestrator import solve_instance
+
+        monkeypatch.setattr(global_config, "OSRM_URL", "")
+
+        solution, used_osrm = solve_instance(medium_instance)
+        assert used_osrm is False
+        assert solution.costo_total > 0
+
 
 class TestFleetSizeValidation:
     """Tests para validar que la solución no exceda num_vehiculos disponibles."""

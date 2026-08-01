@@ -789,6 +789,18 @@ input:focus-visible {
   font-size: 13px;
 }
 
+/* Aviso informativo que NO bloquea el envío (ej. volumen excede el vehículo
+   más chico de una flota mixta, pero no el peso) — distinto visualmente de
+   .error-message para no entrenar al usuario a ignorar carteles rojos. */
+.volume-warning-message {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-control);
+  background: var(--color-beacon-bg);
+  color: var(--color-beacon);
+  font-size: 13px;
+}
+
 /* ---- vehicle catalog ---- */
 
 .vehicle-catalog-fieldset {
@@ -1090,6 +1102,11 @@ input:focus-visible {
   font-size: 13px;
   color: var(--color-ink-soft);
   margin: var(--space-1) 0 0;
+}
+
+.repartidor-stop-link--missing {
+  color: var(--color-ink-soft);
+  font-style: italic;
 }
 
 .repartidor-stop-actions {

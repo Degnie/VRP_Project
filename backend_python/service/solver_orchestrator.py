@@ -340,7 +340,7 @@ class SolverOrchestrator:
         }
 
 
-def solve_instance(instance: Instancia) -> Solucion:
+def solve_instance(instance: Instancia) -> Tuple[Solucion, bool]:
     """
     Convenience function: Solver una instancia y retornar solución.
 
@@ -348,10 +348,18 @@ def solve_instance(instance: Instancia) -> Solucion:
         instance: Instancia VRP (validated)
 
     Returns:
-        Solucion: Solución validada
+        (Solucion, used_osrm): Solución validada, y si el costo/secuencia se
+        calcularon con distancias reales de calles (OSRM) o con fallback
+        euclídeo. Bug real (Ronda 13, ciclo nuevo, dueño y operario,
+        encontrado independientemente por ambos): el orchestrator ya
+        registraba esta degradación en self.log, pero se descartaba acá — el
+        costo mostrado al usuario era indistinguible de un cálculo con calles
+        reales, aunque en realidad el solver optimizó contra línea recta.
 
     Raises:
         ValueError: Si no hay solución factible
     """
     orchestrator = SolverOrchestrator(instance)
-    return orchestrator.solve()
+    solucion = orchestrator.solve()
+    used_osrm = any(line.startswith("Cost matrix: OSRM") for line in orchestrator.log)
+    return solucion, used_osrm

@@ -85,6 +85,37 @@ class TestVehicleCatalogAPI:
         assert created.status_code == 201
         assert created.json()["id"]
 
+    def test_create_vehicle_type_zero_weight_gives_spanish_error(self):
+        """Bug real (Ronda 18, ciclo nuevo, dueño): weight_capacity_kg/
+        volume_capacity_m3 usaban Field(gt=0) sin validador propio, dejando
+        pasar el mensaje crudo de Pydantic ("Input should be greater than
+        0", en inglés) hasta la UI — único texto en inglés en una app con
+        más de 60 mensajes ya traducidos con tono consistente."""
+        client = self._client()
+        token, _ = self._register_owner(client, "Flota ZeroWeight")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        response = client.post("/vehicle-catalog", json={
+            "name": "Moto", "weight_capacity_kg": 0, "volume_capacity_m3": 0.15, "tolerance_margin": 0.9,
+        }, headers=headers)
+        assert response.status_code == 422
+        detail = str(response.json()["detail"])
+        assert "Input should be greater than" not in detail
+        assert "mayor a 0" in detail
+
+    def test_create_vehicle_type_zero_volume_gives_spanish_error(self):
+        client = self._client()
+        token, _ = self._register_owner(client, "Flota ZeroVolume")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        response = client.post("/vehicle-catalog", json={
+            "name": "Moto", "weight_capacity_kg": 30, "volume_capacity_m3": 0, "tolerance_margin": 0.9,
+        }, headers=headers)
+        assert response.status_code == 422
+        detail = str(response.json()["detail"])
+        assert "Input should be greater than" not in detail
+        assert "mayor a 0" in detail
+
     def test_catalog_isolated_between_accounts(self):
         client = self._client()
         token_a, _ = self._register_owner(client, "Flota B")

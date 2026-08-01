@@ -9,6 +9,83 @@ test.beforeEach(async ({ page }) => {
   await loginFreshAccount(page);
 });
 
+test("el aviso de volumen (no bloqueante) se muestra distinto de un error real que sí bloquea", async ({ page }) => {
+  // Bug real (Ronda 9, ciclo nuevo, dueño): el aviso de volumen es solo
+  // informativo (el solver es peso-only, no bloquea el submit) pero
+  // compartía la misma clase .error-message/role="alert" que los errores
+  // que sí bloquean — un dueño con flota mixta lo veía en cada pedido normal
+  // (volumen de un cliente > vehículo más chico, cubierto por uno grande),
+  // entrenándolo a ignorar carteles rojos.
+  await page.locator("#depot-x").fill("-77.035");
+  await page.locator("#depot-y").fill("-12.0464");
+  await page.getByRole("button", { name: "+ Agregar tipo de vehículo" }).click();
+  await page.getByLabel("Nombre del vehículo").fill("Moto");
+  await page.getByLabel("Capacidad de peso en kg").fill("30");
+  await page.getByLabel("Capacidad de volumen en metros cúbicos").fill("0.05");
+  await page.waitForTimeout(300);
+  await page.getByRole("button", { name: "+ Agregar tipo de vehículo" }).click();
+  await page.getByLabel("Nombre del vehículo").nth(1).fill("Camioneta");
+  await page.getByLabel("Capacidad de peso en kg").nth(1).fill("500");
+  await page.getByLabel("Capacidad de volumen en metros cúbicos").nth(1).fill("5");
+  await page.waitForTimeout(300);
+  await page.getByLabel(/Cantidad disponible de Moto/).fill("1");
+  await page.getByLabel(/Cantidad disponible de Camioneta/).fill("1");
+
+  const firstCard = page.locator(".client-card").first();
+  await firstCard.locator(".client-card-summary").click();
+  await firstCard.locator(".field-row input").nth(0).fill("-77.03");
+  await firstCard.locator(".field-row input").nth(1).fill("-12.05");
+  await firstCard.locator('input[placeholder="kg"]').fill("5");
+  // Volumen 0.5x0.5x0.5 = 0.125 m³, mayor que la moto (0.05) pero menor que
+  // la camioneta (5) — un pedido perfectamente resoluble, no un error real.
+  await firstCard.locator('input[placeholder="largo cm"]').fill("50");
+  await firstCard.locator('input[placeholder="ancho cm"]').fill("50");
+  await firstCard.locator('input[placeholder="alto cm"]').fill("50");
+
+  await page.getByRole("button", { name: /Resolver instancia/ }).click();
+  await expect(page.locator(".volume-warning-message").filter({ hasText: "excede la capacidad del vehículo más chico" })).toBeVisible();
+  await expect(page.locator(".error-message")).toHaveCount(0);
+  await expect(page.locator(".solution-summary")).toBeVisible({ timeout: 15_000 });
+});
+
+test("un cliente agregado a mano sin X/Y avisa cuántos quedaron fuera de la resolución", async ({ page }) => {
+  // Bug real (Ronda 9, ciclo nuevo, operario): a diferencia del import CSV
+  // (que sí avisa filas omitidas), un cliente agregado a mano sin X/Y
+  // cargados se descartaba del submit en silencio — la fila colapsada no
+  // muestra X/Y, así que se ve idéntica a un cliente completo. El operario
+  // podía resolver y mandar una ruta con menos pedidos de los que cargó.
+  await page.locator("#depot-x").fill("-77.035");
+  await page.locator("#depot-y").fill("-12.0464");
+
+  const firstCard = page.locator(".client-card").first();
+  await firstCard.locator(".client-card-summary").click();
+  await firstCard.locator(".field-row input").nth(0).fill("-77.03");
+  await firstCard.locator(".field-row input").nth(1).fill("-12.05");
+  await firstCard.locator('input[placeholder="kg"]').fill("5");
+  // Las otras 2 filas por defecto (row-1, row-2) quedan sin X/Y cargados.
+
+  await page.getByRole("button", { name: /Resolver instancia/ }).click();
+  await expect(page.locator(".volume-warning-message")).toContainText("2 clientes sin X/Y cargados");
+  await expect(page.locator(".solution-summary")).toBeVisible({ timeout: 15_000 });
+});
+
+test("Flota disponible hoy muestra la capacidad EFECTIVA (con margen), no la nominal", async ({ page }) => {
+  // Bug real (Ronda 8, ciclo nuevo, dueño): el solver usa la capacidad
+  // ajustada por margen de tolerancia (buildInstance.ts hace ese mismo
+  // cálculo para vehicle_capacities), pero esta pantalla mostraba la
+  // nominal — con un margen de 90%, el dueño veía "1000 kg combinados"
+  // cuando el solver en realidad planifica contra 900 kg, sin ningún aviso.
+  await page.getByRole("button", { name: "+ Agregar tipo de vehículo" }).click();
+  await page.getByLabel("Nombre del vehículo").fill("Camioneta");
+  await page.getByLabel("Capacidad de peso en kg").fill("1000");
+  await page.getByLabel("Margen de tolerancia en porcentaje").fill("90");
+  await page.waitForTimeout(500);
+  await page.getByLabel(/Cantidad disponible de Camioneta/).fill("1");
+
+  await expect(page.locator(".fleet-vehicle-spec")).toContainText("900 kg efectivos");
+  await expect(page.locator(".fleet-summary")).toContainText("900 kg efectivos combinados");
+});
+
 test("flota heterogénea envía vehicle_capacities ordenada de mayor a menor", async ({ page }) => {
   // El catálogo vacío empieza expandido — no hace falta togglear la sección.
   await page.getByRole("button", { name: "+ Agregar tipo de vehículo" }).click();
@@ -48,6 +125,31 @@ test("flota heterogénea envía vehicle_capacities ordenada de mayor a menor", a
   // Ordenado de mayor a menor: camioneta (200*0.9=180) primero, luego motos (50*0.9=45)
   expect(body.vehicle_capacities[0]).toBeGreaterThanOrEqual(body.vehicle_capacities[1]);
   expect(body.vehicle_capacities[1]).toBeGreaterThanOrEqual(body.vehicle_capacities[2]);
+});
+
+test("la pantalla de resultados muestra la capacidad del vehículo, no solo su número", async ({ page }) => {
+  // Bug real (Ronda 18, ciclo nuevo, operario): con flota heterogénea de 3+
+  // tipos, la pantalla de resultados solo mostraba "Vehículo N" sin ningún
+  // indicio de qué tipo/capacidad le tocó — imposible saber a ojo cuál ruta
+  // es la moto (capacidad chica) para no sobrecargarla al reasignar. El
+  // nombre del tipo no llega hasta acá (se aplana a un array de números),
+  // pero la capacidad sí — alcanza para distinguir vehículos a ojo.
+  await page.getByRole("button", { name: "+ Agregar tipo de vehículo" }).click();
+  await page.getByLabel("Nombre del vehículo").fill("Camioneta");
+  await page.getByLabel("Capacidad de peso en kg").fill("200");
+  await page.getByLabel(/Cantidad disponible de Camioneta/).fill("1");
+
+  await page.locator("#depot-x").fill("-77.03");
+  await page.locator("#depot-y").fill("-12.05");
+  const firstCard = page.locator(".client-card").first();
+  await firstCard.locator(".client-card-summary").click();
+  await firstCard.locator(".field-row input").nth(0).fill("-77.06");
+  await firstCard.locator(".field-row input").nth(1).fill("-11.98");
+  await firstCard.locator('input[placeholder="kg"]').fill("5");
+
+  await page.getByRole("button", { name: /Resolver instancia/ }).click();
+  await expect(page.locator(".solution-summary")).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator(".route-vehicle-capacity")).toHaveText("(180 kg)");
 });
 
 test("importar catálogo con BOM UTF-8 y una celda en Windows-1252 no rompe la detección de columnas", async ({ page }) => {

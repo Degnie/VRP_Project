@@ -63,7 +63,7 @@ class TestSolverOrchestrator:
 
     def test_solve_instance_convenience_function(self, simple_instance):
         """Función de conveniencia solve_instance() funciona."""
-        solution = solve_instance(simple_instance)
+        solution, _ = solve_instance(simple_instance)
 
         assert isinstance(solution, Solucion)
         assert solution.instancia_id == "test_simple"
@@ -74,7 +74,7 @@ class TestSolverCapacityConstraints:
 
     def test_routes_respect_vehicle_capacity(self, simple_instance):
         """Cada ruta respeta capacidad del vehículo."""
-        solution = solve_instance(simple_instance)
+        solution, _ = solve_instance(simple_instance)
 
         for ruta in solution.rutas:
             # Demanda total en ruta
@@ -109,12 +109,12 @@ class TestSolverCostCalculation:
 
     def test_solution_cost_is_positive(self, simple_instance):
         """Costo de solución siempre >= 0."""
-        solution = solve_instance(simple_instance)
+        solution, _ = solve_instance(simple_instance)
         assert solution.costo_total >= 0
 
     def test_solution_cost_equals_sum_of_route_costs(self, simple_instance):
         """costo_total == sum(ruta.costo)."""
-        solution = solve_instance(simple_instance)
+        solution, _ = solve_instance(simple_instance)
         route_sum = sum(r.costo for r in solution.rutas)
 
         # Floating point tolerance

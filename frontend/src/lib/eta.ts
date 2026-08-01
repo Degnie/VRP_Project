@@ -21,8 +21,12 @@ function cumulativeDistances(geometry: [number, number][]): number[] {
 }
 
 function formatHHMM(minutesFromMidnight: number): string {
-  const h = Math.floor(minutesFromMidnight / 60) % 24;
-  const m = Math.round(minutesFromMidnight % 60);
+  // Bug real (Ronda 5, ciclo nuevo, operario): redondear DESPUÉS del módulo
+  // podía dar minutos=60 (ej. 659.51 → h=10, m=round(59.51)=60 → "10:60", una
+  // hora inválida). Se redondea el total de minutos ANTES de separar h/m.
+  const totalMinutes = Math.round(minutesFromMidnight);
+  const h = Math.floor(totalMinutes / 60) % 24;
+  const m = totalMinutes % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
@@ -72,7 +76,13 @@ export function estimateRouteEtas(
       });
       const fractionOfRoute = geomDistances[closestIdx] / totalGeomDistance;
       const travelMinutes = (durationSeconds / 60) * fractionOfRoute;
-      const serviceOffsetMinutes = i * (serviceMinutes / 60); // acumulado de paradas previas, aproximado
+      // Bug real (Ronda 5, ciclo nuevo, operario): serviceMinutes YA está en
+      // minutos (input "min por parada" en SolutionSummary.tsx) — dividir por
+      // 60 acá lo trataba como si fuera horas, subestimando el tiempo de
+      // servicio acumulado ~60x. Con 8 min/parada, la parada #10 debía sumar
+      // ~80 min acumulados y solo sumaba ~1.3 — el ETA se adelantaba cada vez
+      // más a partir de la parada ~15-20 en rutas largas.
+      const serviceOffsetMinutes = i * serviceMinutes; // acumulado de paradas previas, aproximado
       const arrivalMinutes = departureMinutes + travelMinutes + serviceOffsetMinutes;
 
       const cushion = Math.max(5, arrivalMinutes * 0.1 - departureMinutes * 0.1);

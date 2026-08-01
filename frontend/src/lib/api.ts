@@ -97,7 +97,7 @@ async function request<T>(path: string, init?: RequestInit, timeoutMs: number = 
 export const api = {
   health: () => request<HealthStatus>("/health"),
   solve: (body: InstanceRequest) =>
-    request<SolutionResponse>("/solve", { method: "POST", body: JSON.stringify(body) }),
+    request<SolutionResponse>("/solve", { method: "POST", body: JSON.stringify(body) }, SOLVE_TIMEOUT_MS),
   listInstances: (opts?: { assignedOnly?: boolean }) =>
     request<InstanceSummary[]>(`/instances${opts?.assignedOnly ? "?assigned_only=true" : ""}`),
   getSolution: (instanciaId: string) =>
@@ -107,9 +107,29 @@ export const api = {
     const headers: Record<string, string> = {};
     if (session) headers["Authorization"] = `Bearer ${session.accessToken}`;
     const query = vehicleId !== undefined ? `?vehicle_id=${vehicleId}` : "";
-    const res = await fetch(`${API_BASE}/solutions/${encodeURIComponent(instanciaId)}/export.pdf${query}`, {
-      headers,
-    });
+
+    // Bug real (Ronda 2, ciclo nuevo, repartidor): este fetch no pasaba por
+    // request(), así que le faltaban las mismas dos protecciones que Rondas
+    // 50-51 ya dieron a todo lo demás — sin timeout, una conexión colgada
+    // (no un error inmediato) dejaba "Generando PDF…" para siempre; y sin
+    // traducir el error, un repartidor offline real veía el "Failed to
+    // fetch" crudo de fetch() en vez de un mensaje en español.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(`${API_BASE}/solutions/${encodeURIComponent(instanciaId)}/export.pdf${query}`, {
+        headers,
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if ((err as Error).name === "AbortError") {
+        throw new Error("La conexión tardó demasiado — probá de nuevo.");
+      }
+      throw new Error("Sin conexión — no se pudo exportar el PDF. Probá de nuevo.");
+    } finally {
+      clearTimeout(timeoutId);
+    }
     if (!res.ok) {
       // Mismo parseo de `detail` que request() — sin esto, un 404 (ej. el
       // dueño borró la instancia mientras el repartidor tenía la ruta
@@ -176,7 +196,7 @@ export const api = {
   rescheduleInstance: (instanciaId: string) =>
     request<RescheduleResponse>(`/instances/${encodeURIComponent(instanciaId)}/reschedule`, { method: "POST" }),
   solveExistingInstance: (instanciaId: string) =>
-    request<SolutionResponse>(`/instances/${encodeURIComponent(instanciaId)}/solve`, { method: "POST" }),
+    request<SolutionResponse>(`/instances/${encodeURIComponent(instanciaId)}/solve`, { method: "POST" }, SOLVE_TIMEOUT_MS),
   updateClient: (instanciaId: string, clientId: number, body: UpdateClientRequest) =>
     request<{ id: number; x: number; y: number; demand: number }>(
       `/instances/${encodeURIComponent(instanciaId)}/clients/${clientId}`,

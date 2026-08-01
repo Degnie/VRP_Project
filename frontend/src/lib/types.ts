@@ -27,6 +27,10 @@ export interface SolutionResponse {
   total_cost: number;
   num_routes: number;
   routes: RouteResult[];
+  // Bug real (Ronda 13, ciclo nuevo): si es false, el solver calculó costo y
+  // secuencia con distancia euclídea (OSRM no disponible) — total_cost no
+  // refleja distancia real de calles.
+  used_osrm: boolean;
 }
 
 export interface InstanceSummary {

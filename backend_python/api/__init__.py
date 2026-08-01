@@ -1,5 +1,6 @@
 """FastAPI application factory with persistence integration."""
 
+import re
 import uuid
 from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -47,6 +48,16 @@ def _namespaced_id(account_id: str, instancia_id: str) -> str:
 def _strip_namespace(account_id: str, namespaced_id: str) -> str:
     prefix = f"{account_id}{_NAMESPACE_SEP}"
     return namespaced_id[len(prefix):] if namespaced_id.startswith(prefix) else namespaced_id
+
+
+# Bug real (Ronda 10, ciclo nuevo, dueño): "ID de instancia" es texto libre
+# sin restricciones en el formulario, pero se interpolaba crudo en el header
+# Content-Disposition del export de PDF. Un salto de línea rompe el header a
+# nivel de protocolo (h11 lo rechaza, 500 sin aviso claro); una comilla lo
+# deja mal formado (corta el parámetro filename a mitad). Se sanea a solo
+# caracteres seguros para un nombre de archivo antes de interpolar.
+def _safe_filename_component(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]", "_", value)
 
 
 # Pydantic models
@@ -117,6 +128,12 @@ class SolutionResponse(BaseModel):
     total_cost: float
     num_routes: int
     routes: List[Dict[str, Any]]
+    # Bug real (Ronda 13, ciclo nuevo, dueño y operario, hallado
+    # independientemente por ambos): si OSRM no está disponible, el solver ya
+    # caía en silencio a distancia euclídea para TODA la matriz de costos
+    # (afectando total_cost y la secuencia optimizada), sin que este campo
+    # existiera — el número se veía idéntico a un cálculo con calles reales.
+    used_osrm: bool = True
 
 
 class InstanceSummary(BaseModel):
@@ -140,9 +157,30 @@ class VehicleTypeRequest(BaseModel):
     """
     id: Optional[str] = None
     name: str = Field(max_length=255)
-    weight_capacity_kg: float = Field(gt=0)
-    volume_capacity_m3: float = Field(gt=0)
+    weight_capacity_kg: float
+    volume_capacity_m3: float
     tolerance_margin: float = 0.9
+
+    # Bug real (Ronda 18, ciclo nuevo, dueño): Field(gt=0) sin validador
+    # propio dejaba pasar el mensaje crudo de Pydantic ("Input should be
+    # greater than 0", en inglés) hasta la UI del catálogo — el único texto
+    # en inglés/jerga técnica en una app con más de 60 mensajes de error ya
+    # traducidos con tono consistente. Alcanzable: el input HTML min="1" es
+    # solo un hint visual, no bloquea escribir "0" directamente (el sync es
+    # por useEffect en cada cambio, sin submit nativo de por medio).
+    @field_validator("weight_capacity_kg")
+    @classmethod
+    def _validate_weight(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("La capacidad de peso debe ser mayor a 0 kg")
+        return v
+
+    @field_validator("volume_capacity_m3")
+    @classmethod
+    def _validate_volume(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("La capacidad de volumen debe ser mayor a 0 m³")
+        return v
 
 
 class VehicleTypeOut(BaseModel):
@@ -189,10 +227,24 @@ class UpdateClientRequest(BaseModel):
     # Opcional: editar solo contacto/ubicación no debería obligar al caller a
     # conocer/retransmitir la demanda actual del cliente — si se omite, el
     # endpoint preserva la que ya está persistida.
-    demand: Optional[float] = Field(default=None, gt=0)
+    demand: Optional[float] = Field(default=None)
     customer_name: Optional[str] = Field(default=None, max_length=255)
     customer_phone: Optional[str] = Field(default=None, max_length=50)
     address: Optional[str] = Field(default=None, max_length=500)
+
+    # Bug real (Ronda 19, ciclo nuevo, dueño): mismo patrón que
+    # VehicleTypeRequest.weight_capacity_kg/volume_capacity_m3 (Ronda 18) —
+    # Field(gt=0) sin validador propio dejaba pasar el mensaje crudo de
+    # Pydantic en inglés ("Input should be greater than 0") si demand llegaba
+    # en 0/negativo. El único caller de UI hoy (ClientEditControl.tsx) omite
+    # este campo a propósito, pero sigue siendo superficie de API pública
+    # (api.updateClient acepta demand) alcanzable por cualquier caller directo.
+    @field_validator("demand")
+    @classmethod
+    def _validate_demand(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None and v <= 0:
+            raise ValueError("La demanda debe ser mayor a 0")
+        return v
 
     @field_validator("x", "y")
     @classmethod
@@ -534,11 +586,22 @@ def create_app() -> FastAPI:
             "mongodb": mongo_status
         }
 
-    def _solve_and_persist(instance: Instancia, account_id: str, log_label: str) -> SolutionResponse:
+    def _solve_and_persist(
+        instance: Instancia, account_id: str, log_label: str, require_existing: bool = False
+    ) -> SolutionResponse:
         """Corre el pipeline NN→SA→3-opt sobre una Instancia ya construida,
         persiste instancia+solución, y arma la respuesta. Compartido por
         /solve (instancia armada desde el body) y
-        /instances/{id}/solve (instancia ya persistida, ej. tras reprogramar)."""
+        /instances/{id}/solve (instancia ya persistida, ej. tras reprogramar).
+
+        require_existing=True para el segundo caso: el solve del pipeline
+        NN→SA→3-opt puede tardar segundos con instancias grandes, y save_instance
+        hace un upsert incondicional (INSERT ... ON CONFLICT DO UPDATE) — sin
+        este chequeo, un DELETE /instances/{id} concurrente que corría y
+        terminaba MIENTRAS este solve seguía en vuelo quedaba "resucitado" por
+        el upsert al final, reapareciendo en GET /instances como si nunca se
+        hubiera borrado, sin ningún error en ninguno de los dos flujos (Ronda
+        17, ciclo nuevo, dueño)."""
         # Solve ANTES de persistir — save_instance ahora borra clientes
         # obsoletos de una corrida anterior con el mismo instancia_id
         # (Etapa de limpieza de huérfanos); si el solve fallara con la
@@ -548,9 +611,14 @@ def create_app() -> FastAPI:
         # no pasó nada, pero la instancia ya quedó vacía. Solo se
         # persiste si el solve realmente produjo una solución.
         logger.info(f"Solving instance {log_label}")
-        solution = solve_instance(instance)
+        solution, used_osrm = solve_instance(instance)
 
         if pg_adapter:
+            if require_existing and not pg_adapter.load_instance(instance.id, account_id=account_id):
+                raise HTTPException(
+                    status_code=404,
+                    detail="La instancia fue eliminada mientras se resolvía — no se guardó el resultado.",
+                )
             if pg_adapter.save_instance(instance, account_id=account_id):
                 logger.info(f"Saved instance {log_label} to PostgreSQL")
             else:
@@ -570,7 +638,18 @@ def create_app() -> FastAPI:
             if mongo_adapter.save_solution(solution, {"phase": "Phase 3", "status": "completed"}):
                 logger.info(f"Saved solution for {log_label} to MongoDB")
             else:
-                logger.warning(f"Failed to save solution for {log_label} to MongoDB")
+                # Bug real (Ronda 4, ciclo nuevo, operario): un warning logueado
+                # y nada más dejaba Postgres (ya actualizado con la topología
+                # nueva) y Mongo (todavía con la solución VIEJA) inconsistentes
+                # sin que nadie se enterara — GET /solutions, export PDF,
+                # my-route y update_delivery_status leen de Mongo y quedaban
+                # mostrando/validando contra rutas obsoletas en silencio. Se
+                # propaga como error real en vez de tragárselo.
+                logger.error(f"Failed to save solution for {log_label} to MongoDB")
+                raise HTTPException(
+                    status_code=503,
+                    detail="La ruta se calculó pero no se pudo guardar — probá resolver de nuevo.",
+                )
 
         routes = [
             {"vehicle_id": ruta.vehicle_id, "sequence": ruta.secuencia, "cost": ruta.costo}
@@ -580,7 +659,8 @@ def create_app() -> FastAPI:
             instancia_id=_strip_namespace(account_id, solution.instancia_id),
             total_cost=solution.costo_total,
             num_routes=len(solution.rutas),
-            routes=routes
+            routes=routes,
+            used_osrm=used_osrm,
         )
 
     @app.post("/solve", response_model=SolutionResponse)
@@ -629,6 +709,8 @@ def create_app() -> FastAPI:
 
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Solve error: {e}")
             raise HTTPException(status_code=500, detail="Error interno del servidor")
@@ -654,9 +736,11 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="La instancia no tiene clientes para resolver")
 
         try:
-            return _solve_and_persist(instance, current_user.account_id, instancia_id)
+            return _solve_and_persist(instance, current_user.account_id, instancia_id, require_existing=True)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Solve error: {e}")
             raise HTTPException(status_code=500, detail="Error interno del servidor")
@@ -725,6 +809,12 @@ def create_app() -> FastAPI:
                 for ruta in solution.rutas
             ]
 
+            # used_osrm no se persiste junto a la solución (Mongo solo guarda
+            # rutas/costo) — no hay forma de reconstruirlo retroactivamente
+            # para una solución ya calculada, así que este endpoint no puede
+            # afirmar con certeza que usó OSRM. Queda en el default (True) del
+            # modelo; extenderlo requeriría persistir el flag junto al resto
+            # de la solución, fuera de alcance de este fix puntual.
             return SolutionResponse(
                 instancia_id=_strip_namespace(current_user.account_id, solution.instancia_id),
                 total_cost=solution.costo_total,
@@ -783,7 +873,7 @@ def create_app() -> FastAPI:
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
-            headers={"Content-Disposition": f'attachment; filename="ruta_{instancia_id}.pdf"'},
+            headers={"Content-Disposition": f'attachment; filename="ruta_{_safe_filename_component(instancia_id)}.pdf"'},
         )
 
     @app.put("/instances/{instancia_id}/clients/{cliente_id}/status")
@@ -886,7 +976,16 @@ def create_app() -> FastAPI:
             customer_name, customer_phone, address,
         )
         if not updated:
-            raise HTTPException(status_code=404, detail="Cliente no encontrado")
+            # El chequeo de "no reprogramado" de arriba (línea 904-909) puede
+            # perder una carrera contra un reschedule_instance concurrente que
+            # marcó al cliente DESPUÉS de ese chequeo — el UPDATE con guard
+            # atómico (WHERE ... AND delivery_status != 'reprogramado') es la
+            # defensa real, y este es el 409 correcto para ese caso, no un 404
+            # genérico que sugeriría erróneamente que el cliente no existe.
+            raise HTTPException(
+                status_code=409,
+                detail="Este pedido ya fue reprogramado a otra instancia, no se puede editar acá",
+            )
         return {"id": cliente_id, "x": request.x, "y": request.y, "demand": demand}
 
     @app.delete("/instances/{instancia_id}")
@@ -934,6 +1033,27 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Instancia no encontrada")
 
         statuses = pg_adapter.get_client_delivery_statuses(namespaced_id)
+
+        # Bug real (Ronda 21, ciclo nuevo, repartidor): este endpoint no
+        # restringía al repartidor a los clientes de SU propia ruta — a
+        # diferencia de get_my_route, update_delivery_status y
+        # export_solution_pdf (que ya tienen este mismo guard, con comentario
+        # explícito del riesgo). Un repartidor autenticado podía pedir el
+        # estado/nota de TODOS los clientes de una instancia de su cuenta,
+        # incluidas rutas ajenas — las notas de texto libre suelen tener
+        # datos sensibles del domicilio ("no había nadie, dejé aviso con el
+        # vecino"). Se filtra a solo los client_id de su vehículo asignado.
+        if current_user.role == "repartidor":
+            if not mongo_adapter:
+                raise HTTPException(status_code=503, detail="MongoDB no disponible")
+            vehicle_id = pg_adapter.get_assigned_vehicle_for_repartidor(namespaced_id, current_user.user_id)
+            if vehicle_id is None:
+                raise HTTPException(status_code=403, detail="No tenés una ruta asignada en esta instancia")
+            solution = mongo_adapter.load_solution(namespaced_id)
+            ruta = next((r for r in solution.rutas if r.vehicle_id == vehicle_id), None) if solution else None
+            allowed_ids = set(ruta.secuencia) if ruta else set()
+            statuses = {cid: entry for cid, entry in statuses.items() if cid in allowed_ids}
+
         return {
             client_id: DeliveryStatusEntry(status=entry["status"], note=entry["note"])
             for client_id, entry in statuses.items()
@@ -975,9 +1095,12 @@ def create_app() -> FastAPI:
         # las rutas reales de la solución, así que el repartidor asignado
         # jamás vería nada en su vista y la asignación quedaría huérfana en
         # silencio. Se valida contra las rutas de la solución ya resuelta.
-        solution = mongo_adapter.load_solution(namespaced_id) if mongo_adapter else None
-        if solution:
-            valid_vehicle_ids = {ruta.vehicle_id for ruta in solution.rutas}
+        def valid_vehicle_ids_now() -> Optional[set]:
+            solution = mongo_adapter.load_solution(namespaced_id) if mongo_adapter else None
+            return {ruta.vehicle_id for ruta in solution.rutas} if solution else None
+
+        valid_vehicle_ids = valid_vehicle_ids_now()
+        if valid_vehicle_ids is not None:
             for vehicle_id in request.assignments:
                 if vehicle_id not in valid_vehicle_ids:
                     raise HTTPException(status_code=422, detail=f"vehicle_id inválido para esta solución: {vehicle_id}")
@@ -986,6 +1109,13 @@ def create_app() -> FastAPI:
             user = pg_adapter.get_user_by_id(repartidor_user_id)
             if not user or user["account_id"] != current_user.account_id:
                 raise HTTPException(status_code=422, detail=f"Usuario inválido: {repartidor_user_id}")
+            # Bug real (Ronda 2, ciclo nuevo, operario): faltaba validar el rol
+            # del usuario asignado — la UI ya filtra el <select> a repartidores
+            # activos, pero el endpoint aceptaba igual un dueño/operario vía
+            # llamada directa, dejando una asignación con datos inconsistentes
+            # (un dueño mostrado como "repartidor asignado" a una ruta).
+            if user["role"] != "repartidor":
+                raise HTTPException(status_code=422, detail=f"Usuario inválido: {repartidor_user_id} no es repartidor")
 
         # get_assigned_vehicle_for_repartidor asume que un repartidor tiene
         # A LO SUMO un vehicle_id por instancia (una sola ruta a la vez) —
@@ -1001,6 +1131,26 @@ def create_app() -> FastAPI:
                     detail="Un repartidor no puede estar asignado a más de un vehículo en la misma instancia",
                 )
             seen_repartidores.add(repartidor_user_id)
+
+        # Bug real (Ronda 16, ciclo nuevo, dueño): "Resolver de nuevo" y
+        # "Guardar asignaciones" no tienen ningún flag de disabled cruzado —
+        # un re-solve concurrente puede recomponer la topología de vehículos
+        # (y siempre invalida las asignaciones existentes, ver comentario más
+        # abajo en _solve_and_persist) DESPUÉS de que este endpoint validó
+        # contra la solución vieja pero ANTES de escribir. Se re-valida
+        # inmediatamente antes del write para achicar la ventana de carrera
+        # de "toda la duración del request" a "el tiempo entre esta lectura y
+        # el write" — no elimina la carrera por completo (requeriría
+        # versionar la solución), pero cierra el caso más grave: un re-solve
+        # que ya terminó y ya invalidó, pisado en silencio por esta escritura
+        # con datos obsoletos.
+        if valid_vehicle_ids is not None:
+            current_valid_vehicle_ids = valid_vehicle_ids_now()
+            if current_valid_vehicle_ids != valid_vehicle_ids:
+                raise HTTPException(
+                    status_code=409,
+                    detail="La instancia se volvió a resolver mientras guardabas — revisá las asignaciones e intentá de nuevo.",
+                )
 
         pg_adapter.set_route_assignments(namespaced_id, request.assignments)
         return {"assignments": request.assignments}
@@ -1093,7 +1243,17 @@ def create_app() -> FastAPI:
         pg_adapter.save_instance(placeholder, account_id=current_user.account_id)
 
         pending_ids = [row["id"] for row in pending]
-        moved_ids = pg_adapter.mark_clients_rescheduled(namespaced_id, pending_ids, new_namespaced_id)
+        try:
+            moved_ids = pg_adapter.mark_clients_rescheduled(namespaced_id, pending_ids, new_namespaced_id)
+        except psycopg2.Error:
+            # Bug real (Ronda 3, ciclo nuevo, operario): si Postgres falla acá
+            # (corte de conexión, timeout) DESPUÉS de persistir el placeholder
+            # pero antes de marcar los clientes, el placeholder de 0 clientes
+            # quedaba huérfano para siempre — a diferencia del caso de "perdió
+            # la carrera" (moved_ids vacío) de abajo, que sí lo limpia. Mismo
+            # tratamiento: borrar el placeholder antes de propagar el error.
+            pg_adapter.delete_instance(new_namespaced_id, account_id=current_user.account_id)
+            raise
         if not moved_ids:
             # Esta request perdió la carrera — el placeholder vacío ya
             # persistido no le pertenece a nadie (rescheduled_to_instancia_id
@@ -1103,13 +1263,19 @@ def create_app() -> FastAPI:
             pg_adapter.delete_instance(new_namespaced_id, account_id=current_user.account_id)
             raise HTTPException(status_code=409, detail="Estos pedidos ya fueron reprogramados por otra solicitud")
 
-        moved_ids_set = set(moved_ids)
+        # Bug real (Ronda 17, ciclo nuevo, operario): usar el snapshot `pending`
+        # (leído ANTES de mark_clients_rescheduled) para armar la instancia
+        # nueva perdía en silencio cualquier PATCH /clients/{id} que hubiera
+        # llegado a tiempo entre ese snapshot y el guard atómico de arriba —
+        # ambos requests devolvían 200, pero la edición nunca se reflejaba.
+        # Se relee el dato fresco de los clientes efectivamente movidos.
+        fresh_rows = pg_adapter.get_clients_by_id(namespaced_id, moved_ids)
         new_clientes = [
             Cliente(
                 id=row["id"], coordenada=Coordinate(row["x"], row["y"]), demanda=row["demand"],
                 customer_name=row["customer_name"], customer_phone=row["customer_phone"], address=row["address"],
             )
-            for row in pending if row["id"] in moved_ids_set
+            for row in fresh_rows
         ]
         new_instance = Instancia(
             id=new_namespaced_id, deposito=instance.deposito, flota=instance.flota, clientes=new_clientes,

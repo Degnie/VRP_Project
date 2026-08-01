@@ -42,6 +42,33 @@ test("dibujar polígono de cobertura excluye clientes fuera de él del POST /sol
   expect(body.coordinates.length).toBeLessThan(50);
 });
 
+test("si falla el borrado de la zona de cobertura, el polígono sigue visible en el mapa", async ({ page }) => {
+  // Bug real (Ronda 2, ciclo nuevo, dueño): handleRedrawCoverage borraba el
+  // polígono del estado local (mapa) de forma optimista ANTES de saber si el
+  // DELETE al backend tenía éxito — si fallaba, el mapa quedaba sin zona
+  // visible mientras el backend todavía la tenía guardada, con el único
+  // aviso siendo un texto de error fácil de no leer.
+  await page.getByRole("button", { name: "Dibujar zona de cobertura" }).click();
+  const map = page.locator(".route-map");
+  const box = await map.boundingBox();
+  if (!box) throw new Error("mapa sin bounding box");
+
+  await page.mouse.click(box.x + 20, box.y + 20);
+  await page.mouse.click(box.x + 120, box.y + 20);
+  await page.mouse.click(box.x + 70, box.y + 120);
+  await page.getByRole("button", { name: "Cerrar polígono" }).click();
+  await expect(page.getByRole("button", { name: "Redibujar zona de cobertura" })).toBeVisible();
+
+  await page.route("**/coverage-zone", (route) => {
+    if (route.request().method() === "DELETE") return route.abort("failed");
+    return route.continue();
+  });
+
+  await page.getByRole("button", { name: "Borrar zona" }).click();
+  await expect(page.locator(".error-message")).toContainText("No se pudo borrar la zona de cobertura");
+  await expect(page.getByRole("button", { name: "Redibujar zona de cobertura" })).toBeVisible();
+});
+
 test("el polígono de cobertura persiste tras recargar la página", async ({ page }) => {
   await page.getByRole("button", { name: "Dibujar zona de cobertura" }).click();
   const map = page.locator(".route-map");

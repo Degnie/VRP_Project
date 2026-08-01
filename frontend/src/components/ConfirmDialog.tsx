@@ -23,13 +23,18 @@ export function ConfirmDialog({ open, title, message, onConfirm, onCancel, child
   if (!open) return null;
 
   return (
-    <div className="confirm-dialog-overlay" onClick={onCancel}>
+    // Bug real (Ronda 1, ciclo nuevo): el overlay cerraba el diálogo (=
+    // Cancelar, sin aplicar el cambio) con un solo tap fuera de la caja. En
+    // mobile (repartidor en la calle, con una mano ocupada) un toque que no
+    // acierta el textarea o el botón "Confirmar" cae fuera de la caja y
+    // descarta la nota recién escrita en silencio, sin ningún aviso — se
+    // requiere Cancelar/Confirmar explícito o Escape.
+    <div className="confirm-dialog-overlay">
       <div
         className="confirm-dialog"
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="confirm-dialog-title"
-        onClick={(e) => e.stopPropagation()}
       >
         <h3 id="confirm-dialog-title">{title}</h3>
         <p>{message}</p>

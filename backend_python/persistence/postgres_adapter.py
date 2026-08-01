@@ -333,11 +333,18 @@ class PostgreSQLAdapter:
             return False
         cursor = self.conn.cursor()
         try:
+            # Bug real (Ronda 15, ciclo nuevo, operario): el endpoint chequeaba
+            # "no reprogramado" con un SELECT separado ANTES de este UPDATE —
+            # entre ese chequeo y el commit, un reschedule_instance concurrente
+            # podía leer el snapshot viejo (sin esta edición) y marcar el
+            # cliente como reprogramado, perdiendo la corrección en silencio
+            # (ambos requests devolvían 200). Igual que update_client_delivery_status,
+            # el guard va en el propio WHERE para que sea atómico con el UPDATE.
             cursor.execute(
                 """
                 UPDATE clientes SET x=%s, y=%s, demand=%s,
                     customer_name=%s, customer_phone=%s, address=%s
-                WHERE id=%s AND instancia_id=%s
+                WHERE id=%s AND instancia_id=%s AND delivery_status != 'reprogramado'
                 """,
                 [x, y, demand, customer_name, customer_phone, address, client_id, instance_id],
             )
@@ -846,6 +853,37 @@ class PostgreSQLAdapter:
                 "SELECT id, demand, x, y, customer_name, customer_phone, address "
                 "FROM clientes WHERE instancia_id = %s AND delivery_status IN ('pendiente', 'no_encontrado', 'rechazado')",
                 [instancia_id],
+            )
+            return [
+                {
+                    "id": row[0], "demand": row[1], "x": row[2], "y": row[3],
+                    "customer_name": row[4], "customer_phone": row[5], "address": row[6],
+                }
+                for row in cursor.fetchall()
+            ]
+        except psycopg2.Error:
+            return []
+        finally:
+            cursor.close()
+
+    def get_clients_by_id(self, instancia_id: str, cliente_ids: List[int]) -> List[dict]:
+        """Datos actuales de clientes específicos por id, sin filtro de
+        delivery_status. Bug real (Ronda 17, ciclo nuevo, operario):
+        reschedule_instance usaba el snapshot de get_pending_clients (leído
+        ANTES de mark_clients_rescheduled) para armar la instancia nueva —
+        una edición válida de PATCH /clients/{id} que llegara entre ese
+        snapshot y el guard atómico del reschedule se perdía en silencio,
+        porque la instancia nueva se armaba con los datos VIEJOS. Se relee
+        después de marcar, para reflejar cualquier edición que haya llegado
+        a tiempo."""
+        if self.conn is None or not cliente_ids:
+            return []
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT id, demand, x, y, customer_name, customer_phone, address "
+                "FROM clientes WHERE instancia_id = %s AND id = ANY(%s)",
+                [instancia_id, cliente_ids],
             )
             return [
                 {

@@ -37,6 +37,20 @@ test("importa CSV con delimitador ; (Excel es-*) en vez de ,", async ({ page }) 
   await expect(page.locator(".client-card")).toHaveCount(2);
 });
 
+test("importa CSV con decimales en coma (Excel es-*) sin descartar las filas", async ({ page }) => {
+  // Bug real (Ronda 4, ciclo nuevo, dueño): csv.ts ya detecta el delimitador
+  // ";" para el caso de Excel en configuración regional es-* (donde "," es el
+  // separador decimal), pero eso solo resuelve el delimitador de columnas —
+  // el VALOR de cada celda numérica seguía viniendo con coma ("-76,96122"),
+  // y Number("-76,96122") da NaN. Cada fila con decimales se descartaba en
+  // silencio; con TODAS las coordenadas del archivo así, el import fallaba
+  // completo pese a que el archivo era correcto.
+  const filePath = path.resolve(__dirname, "../examples/clientes_lima_coma_decimal.csv");
+  await page.locator("#clients-file").setInputFiles(filePath);
+  await expect(page.locator(".import-status")).toContainText("Se importaron 2 clientes");
+  await expect(page.locator(".client-card")).toHaveCount(2);
+});
+
 test("importa CSV en Windows-1252 sin corromper ñ/tildes en nombre de cliente", async ({ page }) => {
   // Bug real (Ronda 43, confirmación): Blob.text() decodifica siempre como
   // UTF-8, sin sniffear encoding — un CSV real en Latin-1/Windows-1252

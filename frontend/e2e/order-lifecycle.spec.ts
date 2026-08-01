@@ -259,6 +259,113 @@ test("dueño ve y cambia el estado de entrega desde la hoja de ruta resuelta", a
   await expect(select).toHaveValue("pendiente");
 });
 
+test("una nota de un estado anterior no se arrastra a una transición sin nota, en el panel de dueño/operario", async ({ page }) => {
+  // Bug real (Ronda 1, ciclo nuevo, operario): mismo bug ya arreglado en
+  // RepartidorView.tsx (Ronda 43) pero nunca aplicado a DeliveryStatusControl
+  // (usado acá, en el panel de escritorio de dueño/operario) — onConfirm
+  // enviaba noteDraft sin importar si el estado destino admite nota o no, así
+  // que la nota vieja de "Rechazado" viajaba en silencio a "Entregado".
+  const suffix = `${Date.now()}`;
+  const email = `owner-note-leak-${suffix}@test.local`;
+  await page.goto("/");
+  await page.getByRole("button", { name: "¿Primera vez? Crear cuenta de empresa" }).click();
+  await page.locator("#account-name").fill(`E2E Note Leak ${suffix}`);
+  await page.locator("#login-email").fill(email);
+  await page.locator("#login-password").fill("clave123456");
+  await page.getByRole("button", { name: "Crear cuenta" }).click();
+  await page.getByRole("heading", { name: "Hoja de despacho" }).waitFor();
+
+  await page.locator("#depot-x").fill("-77.035");
+  await page.locator("#depot-y").fill("-12.0464");
+  const cards = page.locator(".client-card");
+  const coords: [string, string][] = [["-77.06", "-11.98"], ["-77.03", "-12.12"]];
+  for (let i = 0; i < coords.length; i++) {
+    const card = cards.nth(i);
+    await card.locator(".client-card-summary").click();
+    await card.locator(".field-row input").nth(0).fill(coords[i][0]);
+    await card.locator(".field-row input").nth(1).fill(coords[i][1]);
+    await card.locator('input[placeholder="kg"]').fill("5");
+  }
+  await page.getByRole("button", { name: /Resolver instancia/ }).click();
+  await expect(page.locator(".solution-summary")).toBeVisible({ timeout: 15_000 });
+
+  const select = page.locator(".delivery-status-select").first();
+  await select.selectOption("rechazado");
+  const note = "No atendió, vecino avisado";
+  await page.locator(".confirm-dialog-note-field textarea").fill(note);
+  await page.getByRole("button", { name: "Confirmar" }).click();
+  await expect(page.locator(".delivery-status-note").first()).toContainText(note);
+
+  // Salir de "Rechazado" hacia "Entregado" — no admite nota, el textarea no
+  // debe aparecer, y la nota vieja no debe sobrevivir.
+  await select.selectOption("entregado");
+  await expect(page.getByRole("heading", { name: "Cambiar estado de entrega" })).toBeVisible();
+  await expect(page.locator(".confirm-dialog-note-field textarea")).not.toBeVisible();
+  await page.getByRole("button", { name: "Confirmar" }).click();
+
+  await expect(select).toHaveValue("entregado");
+  await expect(page.locator(".delivery-status-note").first()).toHaveCount(0);
+});
+
+test("si el PUT de estado se cuelga pero el backend ya lo aplicó, el select se resincroniza en vez de revertir a un valor viejo", async ({ page }) => {
+  // Bug real (Ronda 51, repartidor): applyChange revertía SIEMPRE a `previous`
+  // ante cualquier error, incluyendo un timeout de red — pero un timeout no
+  // significa que el PUT no se haya aplicado (el UPDATE es idempotente, solo
+  // tardó más en volver la respuesta que en ejecutarse). El operario veía el
+  // valor VIEJO en el select con un mensaje de error, cuando el backend ya
+  // tenía el valor nuevo guardado — desincronización silenciosa hasta el
+  // próximo refresh completo de la instancia.
+  test.setTimeout(45000);
+  const suffix = `${Date.now()}`;
+  const email = `owner-timeout-resync-${suffix}@test.local`;
+  await page.goto("/");
+  await page.getByRole("button", { name: "¿Primera vez? Crear cuenta de empresa" }).click();
+  await page.locator("#account-name").fill(`E2E Timeout Resync ${suffix}`);
+  await page.locator("#login-email").fill(email);
+  await page.locator("#login-password").fill("clave123456");
+  await page.getByRole("button", { name: "Crear cuenta" }).click();
+  await page.getByRole("heading", { name: "Hoja de despacho" }).waitFor();
+
+  await page.locator("#depot-x").fill("-77.035");
+  await page.locator("#depot-y").fill("-12.0464");
+  const cards = page.locator(".client-card");
+  const coords: [string, string][] = [["-77.06", "-11.98"], ["-77.03", "-12.12"]];
+  for (let i = 0; i < coords.length; i++) {
+    const card = cards.nth(i);
+    await card.locator(".client-card-summary").click();
+    await card.locator(".field-row input").nth(0).fill(coords[i][0]);
+    await card.locator(".field-row input").nth(1).fill(coords[i][1]);
+    await card.locator('input[placeholder="kg"]').fill("5");
+  }
+  await page.getByRole("button", { name: /Resolver instancia/ }).click();
+  await expect(page.locator(".solution-summary")).toBeVisible({ timeout: 15_000 });
+
+  const select = page.locator(".delivery-status-select").first();
+  const selectAriaLabel = await select.getAttribute("aria-label");
+  const clientId = selectAriaLabel?.match(/#(\d+)/)?.[1];
+
+  // El PUT nunca responde (simula un timeout real) pero SÍ deja pasar el GET
+  // de delivery-statuses — como si el backend hubiera aplicado el cambio y
+  // solo la respuesta del PUT se hubiera perdido en la red.
+  await page.route(`**/clients/${clientId}/status`, (route) => {
+    if (route.request().method() === "PUT") return; // nunca resuelve
+    route.continue();
+  });
+  await page.route("**/delivery-statuses", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ [clientId!]: { status: "entregado" } }),
+    })
+  );
+
+  await select.selectOption("entregado");
+  await expect(page.locator(".delivery-status-error")).toContainText("tardó demasiado", { timeout: 20000 });
+  // Resincronizado con el valor real del backend (entregado), no revertido
+  // al valor local previo (pendiente).
+  await expect(select).toHaveValue("entregado");
+});
+
 test("dueño corrige un dato de un cliente ya resuelto sin re-resolver, y luego elimina la instancia", async ({ page }) => {
   // Bug real: no había forma de corregir un error de tipeo (dirección,
   // teléfono, coordenada) en un cliente ya cargado sin re-resolver la
@@ -427,6 +534,11 @@ test("reprogramar y resolver desde la UI, sin retipear clientes a mano", async (
   await solveButton.click();
 
   await expect(page.locator(".import-status")).toContainText("resuelta:");
+  // Bug real (Ronda 6, ciclo nuevo, dueño): total_cost es distancia en
+  // METROS — este mensaje mostraba el número crudo sin convertir ni
+  // etiquetar (ej. "costo 45231.7"), inconsistente con el resto de la
+  // pantalla, que siempre muestra distancia en km.
+  await expect(page.locator(".import-status")).toContainText(/costo [\d.,]+ km/);
   await expect(solveButton).not.toBeVisible();
 
   // Bug real: `explicitlyUnassigned` (estado de "desasignaciones sin

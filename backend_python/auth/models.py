@@ -11,12 +11,20 @@ Role = Literal["dueño", "operario", "repartidor"]
 # limpio de "campo demasiado largo".
 _EMAIL_MAX = 255
 _NAME_MAX = 255
+# Bug real (Ronda 21, ciclo nuevo, dueño): no había ninguna longitud mínima
+# de contraseña en todo el stack (ni backend ni los <input type="password">
+# del frontend) — un dueño podía crear su cuenta (o invitar a su equipo) con
+# una contraseña de un solo carácter, sin ningún aviso. Se aplica solo en
+# los dos puntos donde se ESTABLECE una contraseña nueva (registro, invitar
+# equipo) — no en LoginRequest, que solo verifica una ya existente y no debe
+# romper el login de cuentas creadas antes de este fix.
+_PASSWORD_MIN = 8
 
 
 class RegisterRequest(BaseModel):
     account_name: str = Field(max_length=_NAME_MAX)
     email: str = Field(max_length=_EMAIL_MAX)
-    password: str
+    password: str = Field(min_length=_PASSWORD_MIN)
     full_name: Optional[str] = Field(default=None, max_length=_NAME_MAX)
 
 
@@ -34,7 +42,7 @@ class TokenResponse(BaseModel):
 
 class CreateUserRequest(BaseModel):
     email: str = Field(max_length=_EMAIL_MAX)
-    password: str
+    password: str = Field(min_length=_PASSWORD_MIN)
     full_name: Optional[str] = Field(default=None, max_length=_NAME_MAX)
     role: Role
 

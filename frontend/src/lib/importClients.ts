@@ -14,6 +14,21 @@ export interface ImportedPackageRow {
   address: string;
 }
 
+// Bug real (Ronda 4, ciclo nuevo, dueño): Excel en configuración regional
+// es-* (Perú, España, etc.) exporta decimales con coma ("-12,05"), no punto.
+// csv.ts ya detecta y cambia el delimitador de columnas a ";" para ese caso
+// (documentado ahí), pero eso no alcanza para convertir el propio valor —
+// Number("-12,05") da NaN, así que cada fila con un decimal se descartaba en
+// silencio como inválida, pudiendo tirar el import completo si TODAS las
+// coordenadas tenían decimales (el caso normal en datos geográficos reales).
+// Solo se reemplaza si el string tiene el patrón exacto dígitos,dígitos —
+// evita tocar un separador de miles real en cualquier otro dato.
+function parseLocaleNumber(value: unknown): number {
+  if (typeof value !== "string") return Number(value);
+  const normalized = /^-?\d+,\d+$/.test(value) ? value.replace(",", ".") : value;
+  return Number(normalized);
+}
+
 export interface ImportResult {
   depot: { x: string; y: string } | null;
   rows: ImportedPackageRow[]; // sin agrupar todavía — una fila = un paquete
@@ -114,8 +129,8 @@ function rowsFromMatrix(matrix: unknown[][]): ImportResult {
   const [depotRow, ...clientRows] = dataRows;
   let depot: { x: string; y: string } | null = null;
   if (depotRow) {
-    const dx = Number(depotRow[xi]);
-    const dy = Number(depotRow[yi]);
+    const dx = parseLocaleNumber(depotRow[xi]);
+    const dy = parseLocaleNumber(depotRow[yi]);
     if (!Number.isNaN(dx) && !Number.isNaN(dy)) depot = { x: String(dx), y: String(dy) };
   }
 
@@ -126,9 +141,9 @@ function rowsFromMatrix(matrix: unknown[][]): ImportResult {
     const x = row[xi];
     const y = row[yi];
     const weight = row[wi];
-    const xNum = Number(x);
-    const yNum = Number(y);
-    const weightRaw = weight === undefined || weight === "" ? 0 : Number(weight);
+    const xNum = parseLocaleNumber(x);
+    const yNum = parseLocaleNumber(y);
+    const weightRaw = weight === undefined || weight === "" ? 0 : parseLocaleNumber(weight);
 
     if (Number.isNaN(xNum) || Number.isNaN(yNum) || Number.isNaN(weightRaw)) {
       skipped += 1;

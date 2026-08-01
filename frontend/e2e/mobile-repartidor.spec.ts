@@ -42,6 +42,17 @@ async function loginRepartidorInBrowser(
   await page.getByRole("button", { name: "Entrar" }).click();
 }
 
+test("sin ninguna instancia asignada, se avisa en vez de dejar el select vacío sin explicación", async ({ page }) => {
+  // Bug real (Ronda 3, ciclo nuevo, repartidor): una carga exitosa con 0
+  // instancias asignadas (todavía no le crearon la ruta de hoy) era
+  // indistinguible de "la app no cargó bien" — solo se veía el placeholder
+  // "Elegí una instancia…" en el select, sin ningún mensaje.
+  const { repartidorEmail, repartidorPassword } = await createOwnerWithRepartidor(page);
+  await loginRepartidorInBrowser(page, repartidorEmail, repartidorPassword);
+
+  await expect(page.getByText("Todavía no tenés ninguna ruta asignada.")).toBeVisible();
+});
+
 test("repartidor en mobile ve RepartidorView, no el sidebar de escritorio", async ({ page }) => {
   const { repartidorEmail, repartidorPassword } = await createOwnerWithRepartidor(page);
   await loginRepartidorInBrowser(page, repartidorEmail, repartidorPassword);
@@ -66,6 +77,137 @@ test("repartidor en mobile elige instancia, ve paradas y marca una entrega", asy
   await firstStop.getByRole("button", { name: "Entregado" }).click();
   await expect(firstStop.getByRole("button", { name: "Entregado" })).toHaveClass(/repartidor-status-btn--active/);
   await expect(firstStop.locator(".stop-save-indicator--saved")).toBeVisible();
+});
+
+test("el link de llamada limpia el teléfono a solo dígitos, aunque venga con texto pegado", async ({ page }) => {
+  // Bug real (Ronda 6, ciclo nuevo, repartidor): customer_phone es texto
+  // libre sin ninguna validación en el pipeline — un dato "sucio" de un
+  // import descuidado ("999888777 (casa)") viajaba intacto al href de
+  // tel:, arriesgando que el marcador nativo rechace el link completo en
+  // vez de ignorar el sufijo. Se limpia a solo dígitos + "+" inicial.
+  const { ownerToken, repartidorEmail, repartidorPassword, repartidorUserId } =
+    await createOwnerWithRepartidor(page);
+  const instanciaId = `e2e-mobile-phone-clean-${Date.now()}`;
+  const solveRes = await page.request.post(`${API_BASE}/solve`, {
+    headers: { Authorization: `Bearer ${ownerToken}` },
+    data: {
+      instancia_id: instanciaId,
+      coordinates: [[10, 10], [20, 20]],
+      demands: [10, 10],
+      num_vehicles: 1,
+      vehicle_capacity: 100,
+      depot_coordinates: [0, 0],
+      contacts: [{ customer_phone: "999888777 (casa)" }, null],
+    },
+  });
+  expect(solveRes.ok()).toBeTruthy();
+  await page.request.put(`${API_BASE}/instances/${instanciaId}/assignments`, {
+    headers: { Authorization: `Bearer ${ownerToken}` },
+    data: { assignments: { "0": repartidorUserId } },
+  });
+
+  await loginRepartidorInBrowser(page, repartidorEmail, repartidorPassword);
+  await page.locator("#instance-select").selectOption(instanciaId);
+  await expect(page.locator(".repartidor-stop")).toHaveCount(2);
+
+  const phoneLink = page.locator(".repartidor-stop-link", { hasText: "999888777" });
+  await expect(phoneLink).toHaveText("📞 999888777 (casa)");
+  await expect(phoneLink).toHaveAttribute("href", "tel:999888777");
+});
+
+test("un teléfono sin ningún dígito no genera un link de llamada roto", async ({ page }) => {
+  // Bug real (Ronda 13, ciclo nuevo, repartidor): customer_phone es texto
+  // libre — si no tenía NINGÚN dígito (ej. "N/A", "preguntar en portería"),
+  // el guard de renderizado (customer_phone no vacío) pasaba igual, pero el
+  // resultado saneado a solo dígitos quedaba vacío: el botón se veía como un
+  // teléfono válido pero abría "tel:" sin número al tocarlo.
+  const { ownerToken, repartidorEmail, repartidorPassword, repartidorUserId } =
+    await createOwnerWithRepartidor(page);
+  const instanciaId = `e2e-mobile-phone-no-digits-${Date.now()}`;
+  const solveRes = await page.request.post(`${API_BASE}/solve`, {
+    headers: { Authorization: `Bearer ${ownerToken}` },
+    data: {
+      instancia_id: instanciaId,
+      coordinates: [[10, 10], [20, 20]],
+      demands: [10, 10],
+      num_vehicles: 1,
+      vehicle_capacity: 100,
+      depot_coordinates: [0, 0],
+      contacts: [{ customer_phone: "preguntar en portería" }, null],
+    },
+  });
+  expect(solveRes.ok()).toBeTruthy();
+  await page.request.put(`${API_BASE}/instances/${instanciaId}/assignments`, {
+    headers: { Authorization: `Bearer ${ownerToken}` },
+    data: { assignments: { "0": repartidorUserId } },
+  });
+
+  await loginRepartidorInBrowser(page, repartidorEmail, repartidorPassword);
+  await page.locator("#instance-select").selectOption(instanciaId);
+  await expect(page.locator(".repartidor-stop")).toHaveCount(2);
+
+  await expect(page.getByText("preguntar en portería")).toHaveCount(0);
+});
+
+test("no hay botón 'Reprogramado' manual en las paradas — es un estado derivado, no una acción del repartidor", async ({ page }) => {
+  // Bug real (Ronda 15, ciclo nuevo, repartidor): STATUS_LABELS incluye
+  // "reprogramado" (para el label del estado ya derivado), pero el .map()
+  // de botones lo renderizaba igual que los otros cuatro — habilitado, sin
+  // pedir confirmación (no es un TERMINAL_STATUSES como destino). Tocarlo
+  // disparaba un PUT que el backend rechaza con 422 crudo en inglés
+  // (MANUALLY_SETTABLE_DELIVERY_STATUSES lo excluye a propósito).
+  const { ownerToken, repartidorEmail, repartidorPassword, repartidorUserId } =
+    await createOwnerWithRepartidor(page);
+  const instanciaId = `e2e-mobile-no-reprog-btn-${Date.now()}`;
+  await solveAndAssign(page, ownerToken, repartidorUserId, instanciaId);
+
+  await loginRepartidorInBrowser(page, repartidorEmail, repartidorPassword);
+  await page.locator("#instance-select").selectOption(instanciaId);
+  await expect(page.locator(".repartidor-stop")).toHaveCount(2);
+
+  const firstStop = page.locator(".repartidor-stop").first();
+  await expect(firstStop.getByRole("button", { name: "Reprogramado" })).toHaveCount(0);
+});
+
+test("una parada sin dirección muestra un placeholder claro en vez de desaparecer", async ({ page }) => {
+  // Bug real (Ronda 5, ciclo nuevo, repartidor): {stop.address && (...)} sin
+  // fallback hacía desaparecer el bloque entero cuando no había dirección
+  // (indistinguible de "no hay nada acá"), inconsistente con customer_name
+  // que sí tiene fallback `Cliente #${id}`. Acá solveAndAssign no manda
+  // contacts, así que address llega undefined — el caso real más común.
+  const { ownerToken, repartidorEmail, repartidorPassword, repartidorUserId } =
+    await createOwnerWithRepartidor(page);
+  const instanciaId = `e2e-mobile-no-address-${Date.now()}`;
+  await solveAndAssign(page, ownerToken, repartidorUserId, instanciaId);
+
+  await loginRepartidorInBrowser(page, repartidorEmail, repartidorPassword);
+  await page.locator("#instance-select").selectOption(instanciaId);
+  await expect(page.locator(".repartidor-stop")).toHaveCount(2);
+
+  await expect(page.getByText("Sin dirección registrada").first()).toBeVisible();
+});
+
+test("marcar todas las paradas como entregadas muestra un aviso de ruta completa", async ({ page }) => {
+  // Bug real (Ronda 3, ciclo nuevo, repartidor): mismo patrón que el aviso ya
+  // existente para "todo reprogramado" (Ronda 47), generalizado al caso más
+  // común — terminar la ruta del día se veía igual que una ruta a medio
+  // hacer, sin ninguna señal de "ya no queda nada por marcar".
+  const { ownerToken, repartidorEmail, repartidorPassword, repartidorUserId } =
+    await createOwnerWithRepartidor(page);
+  const instanciaId = `e2e-mobile-complete-${Date.now()}`;
+  await solveAndAssign(page, ownerToken, repartidorUserId, instanciaId);
+
+  await loginRepartidorInBrowser(page, repartidorEmail, repartidorPassword);
+  await page.locator("#instance-select").selectOption(instanciaId);
+  const stops = page.locator(".repartidor-stop");
+  await expect(stops).toHaveCount(2);
+
+  for (let i = 0; i < 2; i++) {
+    await stops.nth(i).getByRole("button", { name: "Entregado" }).click();
+    await expect(stops.nth(i).getByRole("button", { name: "Entregado" })).toHaveClass(/repartidor-status-btn--active/);
+  }
+
+  await expect(page.getByText("Ruta de hoy completa — no quedan paradas pendientes.")).toBeVisible();
 });
 
 test("un PUT de estado que se cuelga (nunca responde) termina en error en vez de 'Guardando…' para siempre", async ({ page }) => {
@@ -95,6 +237,39 @@ test("un PUT de estado que se cuelga (nunca responde) termina en error en vez de
 
   await expect(page.locator(".error-message")).toContainText("tardó demasiado", { timeout: 20000 });
   await expect(firstStop.getByRole("button", { name: "Entregado" })).toBeEnabled();
+});
+
+test("si el PUT de estado se cuelga pero el backend ya lo aplicó, la parada se resincroniza en vez de quedar en el valor viejo", async ({ page }) => {
+  // Bug real (Ronda 16, ciclo nuevo, repartidor): DeliveryStatusControl.tsx
+  // (vista de escritorio) ya resincroniza contra el estado real del backend
+  // cuando el error es de red/timeout (el PUT es idempotente, puede haber
+  // llegado igual) — RepartidorView.tsx, el componente donde "mala señal"
+  // es más probable, no tenía ese mismo manejo: un timeout dejaba la parada
+  // mostrando el estado VIEJO sin ningún indicio de que sí se guardó.
+  test.setTimeout(30000);
+  const { ownerToken, repartidorEmail, repartidorPassword, repartidorUserId } =
+    await createOwnerWithRepartidor(page);
+  const instanciaId = `e2e-mobile-resync-${Date.now()}`;
+  await solveAndAssign(page, ownerToken, repartidorUserId, instanciaId);
+
+  await loginRepartidorInBrowser(page, repartidorEmail, repartidorPassword);
+  await page.locator("#instance-select").selectOption(instanciaId);
+  await expect(page.locator(".repartidor-stop")).toHaveCount(2);
+
+  // El PUT nunca responde al navegador, pero SÍ llega al backend real
+  // (route.fetch() dispara la request de verdad antes de colgar la respuesta).
+  await page.route(`**/instances/${instanciaId}/clients/*/status`, async (route) => {
+    await route.fetch();
+    // No fulfill — la respuesta al navegador nunca llega, dispara el timeout.
+  });
+
+  const firstStop = page.locator(".repartidor-stop").first();
+  await firstStop.getByRole("button", { name: "Entregado" }).click();
+  await expect(page.locator(".error-message")).toContainText("tardó demasiado", { timeout: 20000 });
+
+  // El backend YA aplicó el cambio (el fetch real llegó) — la parada debe
+  // reflejar "Entregado" real, no revertir al valor viejo mostrado antes del click.
+  await expect(firstStop.getByRole("button", { name: "Entregado" })).toHaveClass(/repartidor-status-btn--active/);
 });
 
 test("volver de un estado terminal a otro pide confirmación, cancelar no cambia nada", async ({ page }) => {
@@ -182,6 +357,36 @@ test("una nota de un estado anterior no se arrastra a una transición que no adm
   await expect(firstStop.locator(".repartidor-stop-note")).toHaveCount(0);
 });
 
+test("tocar fuera del diálogo de confirmación no lo cierra ni descarta la nota", async ({ page }) => {
+  // Bug real (Ronda 1, ciclo nuevo, repartidor): el overlay cerraba el
+  // diálogo (= Cancelar, sin aplicar el cambio) con un solo tap fuera de la
+  // caja central. En mobile, con una mano ocupada, un toque que no acierta
+  // el textarea o "Confirmar" caía fuera de la caja y descartaba la nota en
+  // silencio, sin ningún aviso.
+  const { ownerToken, repartidorEmail, repartidorPassword, repartidorUserId } =
+    await createOwnerWithRepartidor(page);
+  const instanciaId = `e2e-mobile-overlay-tap-${Date.now()}`;
+  await solveAndAssign(page, ownerToken, repartidorUserId, instanciaId);
+
+  await loginRepartidorInBrowser(page, repartidorEmail, repartidorPassword);
+  await page.locator("#instance-select").selectOption(instanciaId);
+  await expect(page.locator(".repartidor-stop")).toHaveCount(2);
+
+  const firstStop = page.locator(".repartidor-stop").first();
+  await firstStop.getByRole("button", { name: "Rechazado" }).click();
+  const note = "No atendió, vuelvo más tarde";
+  await page.locator(".confirm-dialog-note-field textarea").fill(note);
+
+  // Tap fuera de la caja del diálogo, dentro del overlay.
+  await page.locator(".confirm-dialog-overlay").click({ position: { x: 5, y: 5 } });
+
+  await expect(page.getByRole("heading", { name: "Cambiar estado de entrega" })).toBeVisible();
+  await expect(page.locator(".confirm-dialog-note-field textarea")).toHaveValue(note);
+
+  await page.getByRole("button", { name: "Confirmar" }).click();
+  await expect(firstStop.locator(".repartidor-stop-note")).toContainText(note);
+});
+
 test("recargar la página con un cambio de estado sin confirmar restaura el diálogo con la nota", async ({ page }) => {
   // Bug real: la nota en curso de un cambio de estado (ej. motivo de un
   // "Rechazado") se perdía sin aviso si la sesión expiraba a mitad del
@@ -261,6 +466,27 @@ test("repartidor en mobile puede exportar su hoja en PDF", async ({ page }) => {
   await page.getByRole("button", { name: "Exportar mi hoja en PDF" }).click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toMatch(/^mi_ruta_.*\.pdf$/);
+});
+
+test("exportar PDF que se cuelga (nunca responde) termina en error en vez de 'Generando PDF…' para siempre", async ({ page }) => {
+  // Bug real (Ronda 2, ciclo nuevo, repartidor): exportSolutionPdf en api.ts
+  // usaba un fetch crudo que no pasaba por request(), así que no tenía el
+  // mismo timeout/AbortController que el resto de los endpoints — una
+  // conexión colgada dejaba el botón en "Generando PDF…" para siempre.
+  test.setTimeout(30000);
+  const { ownerToken, repartidorEmail, repartidorPassword, repartidorUserId } =
+    await createOwnerWithRepartidor(page);
+  const instanciaId = `e2e-mobile-pdf-hang-${Date.now()}`;
+  await solveAndAssign(page, ownerToken, repartidorUserId, instanciaId);
+
+  await loginRepartidorInBrowser(page, repartidorEmail, repartidorPassword);
+  await page.locator("#instance-select").selectOption(instanciaId);
+  await expect(page.locator(".repartidor-stop")).toHaveCount(2);
+
+  await page.route(`**/solutions/${instanciaId}/export.pdf*`, () => {});
+
+  await page.getByRole("button", { name: "Exportar mi hoja en PDF" }).click();
+  await expect(page.locator(".error-message")).toContainText("tardó demasiado", { timeout: 20000 });
 });
 
 test("el selector de instancia del repartidor solo lista las asignadas a él, con fecha legible", async ({ page }) => {

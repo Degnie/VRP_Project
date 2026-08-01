@@ -27,6 +27,15 @@ const STATUS_LABELS: Record<DeliveryStatus, string> = {
   rechazado: "Rechazado",
 };
 
+// "reprogramado" es un estado DERIVADO del flujo POST /instances/{id}/reschedule
+// (solo dueño/operario) — nunca una acción manual del repartidor. Bug real
+// (Ronda 15, ciclo nuevo): el botón aparecía habilitado en CADA parada,
+// indistinguible de los otros cuatro, sin pedir confirmación (no está en
+// TERMINAL_STATUSES como destino) — tocarlo disparaba un PUT inmediato que
+// el backend rechaza con 422 (MANUALLY_SETTABLE_DELIVERY_STATUSES lo excluye
+// a propósito), mostrando el detail crudo de Python sin traducir.
+const MANUALLY_SELECTABLE_STATUSES: DeliveryStatus[] = ["pendiente", "entregado", "no_encontrado", "rechazado"];
+
 // Revertir uno de estos sin querer (toque accidental) pierde el registro de
 // una entrega ya confirmada — se pide confirmación antes de salir de acá.
 const TERMINAL_STATUSES: DeliveryStatus[] = ["entregado", "no_encontrado", "reprogramado", "rechazado"];
@@ -275,6 +284,37 @@ export function RepartidorView({ onLogout: onLogoutProp }: Props) {
       // [selectedId] nunca volvía a correr. El refetch trae el estado
       // real (una ruta nueva si fue reasignado, o el mismo 403/404 que
       // deja la pantalla vacía con un mensaje claro en vez de congelada).
+      // Bug real (Ronda 16, ciclo nuevo, repartidor): DeliveryStatusControl.tsx
+      // (vista de escritorio) ya resincroniza contra el estado real del
+      // backend cuando el error es de red/timeout, porque el PUT es
+      // idempotente y puede haber llegado igual aunque el cliente no
+      // recibiera la respuesta a tiempo — acá, el componente donde el
+      // escenario "mala señal" es más probable, no tenía ese mismo manejo:
+      // un timeout dejaba la parada mostrando el estado VIEJO sin ningún
+      // indicio de que el cambio sí pudo haberse guardado en el servidor.
+      const isNetworkIssue = message.includes("tardó demasiado") || message.includes("Sin conexión");
+      if (isNetworkIssue && route) {
+        const requestedId = route.instancia_id;
+        api
+          .getDeliveryStatuses(requestedId)
+          .then((statuses) => {
+            const real = statuses[clientId];
+            if (!real) return;
+            setRoute((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    stops: prev.stops.map((s) =>
+                      s.client_id === clientId
+                        ? { ...s, delivery_status: real.status as DeliveryStatus, delivery_note: real.note }
+                        : s
+                    ),
+                  }
+                : prev
+            );
+          })
+          .catch(() => {});
+      }
       if (message.includes("No tenés una ruta asignada") && route) {
         const requestedId = route.instancia_id;
         // Mismo contador que el efecto de [selectedId] (una sola secuencia
@@ -400,6 +440,13 @@ export function RepartidorView({ onLogout: onLogoutProp }: Props) {
               </button>
             </p>
           )}
+          {!instancesError && instances.length === 0 && (
+            // Bug real (Ronda 3, ciclo nuevo, repartidor): sin este aviso, una
+            // carga exitosa con 0 instancias asignadas (todavía no le crearon
+            // la ruta de hoy) era indistinguible de "la app no cargó bien" —
+            // el select solo mostraba el placeholder "Elegí una instancia…".
+            <p className="import-status">Todavía no tenés ninguna ruta asignada.</p>
+          )}
         </div>
 
         {loading && <p className="import-status">Cargando ruta…</p>}
@@ -427,6 +474,14 @@ export function RepartidorView({ onLogout: onLogoutProp }: Props) {
               // interactuable.
               <p className="repartidor-empty">Todos los pedidos de esta instancia fueron reprogramados a otra instancia.</p>
             )}
+            {route.stops.length > 0 && route.stops.every((s) => s.delivery_status !== "pendiente") && (
+              // Bug real (Ronda 3, ciclo nuevo, repartidor): mismo patrón que
+              // el aviso de "reprogramado" de arriba, generalizado al caso más
+              // común — sin esto, terminar la ruta del día (todo entregado/
+              // rechazado/no encontrado) se veía igual que una ruta a medio
+              // hacer, sin ninguna señal de "ya no queda nada por marcar".
+              <p className="repartidor-empty">Ruta de hoy completa — no quedan paradas pendientes.</p>
+            )}
 
             <ol className="repartidor-stops">
               {route.stops.map((stop) => (
@@ -435,12 +490,29 @@ export function RepartidorView({ onLogout: onLogoutProp }: Props) {
                     <span className="repartidor-stop-sequence">{stop.sequence}</span>
                     <span className="repartidor-stop-name">{stop.customer_name?.trim() || `Cliente #${stop.client_id}`}</span>
                   </div>
-                  {stop.customer_phone && (
-                    <a className="repartidor-stop-link" href={`tel:${stop.customer_phone}`}>
-                      📞 {stop.customer_phone}
-                    </a>
-                  )}
-                  {stop.address && (
+                  {(() => {
+                    // Bug real (Ronda 6, ciclo nuevo, repartidor):
+                    // customer_phone es texto completamente libre, sin
+                    // ninguna validación en todo el pipeline (import CSV,
+                    // edición manual) — algo como "999888777 (casa)" viajaba
+                    // intacto al href, y el marcador nativo podía rechazar
+                    // el tel: completo en vez de solo ignorar el sufijo.
+                    // Se conservan solo dígitos y un "+" inicial opcional.
+                    const digitsOnly = stop.customer_phone?.replace(/(?!^\+)[^\d]/g, "") ?? "";
+                    // Bug real (Ronda 13, ciclo nuevo, repartidor): si el
+                    // texto no tenía NINGÚN dígito (ej. "N/A", "preguntar en
+                    // portería"), el guard de arriba (customer_phone no
+                    // vacío) pasaba igual pero el resultado saneado quedaba
+                    // vacío — el botón se veía como un teléfono válido pero
+                    // al tocarlo abría "tel:" sin número, sin ningún aviso.
+                    if (!digitsOnly) return null;
+                    return (
+                      <a className="repartidor-stop-link" href={`tel:${digitsOnly}`}>
+                        📞 {stop.customer_phone}
+                      </a>
+                    );
+                  })()}
+                  {stop.address?.trim() ? (
                     <a
                       className="repartidor-stop-link"
                       // geo: solo tiene handler nativo en Android — en iOS
@@ -449,12 +521,21 @@ export function RepartidorView({ onLogout: onLogoutProp }: Props) {
                       // ningún aviso. La URL universal de Google Maps abre
                       // la app nativa en ambas plataformas, y cae al mapa
                       // en el navegador si no hay app instalada.
-                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(stop.address)}`}
+                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(stop.address.trim())}`}
                       target="_blank"
                       rel="noreferrer"
                     >
-                      📍 {stop.address}
+                      📍 {stop.address.trim()}
                     </a>
+                  ) : (
+                    // Bug real (Ronda 5, ciclo nuevo, repartidor): sin esto,
+                    // una dirección vacía/solo-espacios hacía desaparecer el
+                    // bloque entero (indistinguible de "no hay nada acá") o,
+                    // sin el .trim(), renderizaba un link visible pero roto
+                    // (📍 seguido de espacio en blanco, abriendo Google Maps
+                    // con query vacío) — inconsistente con customer_name, que
+                    // sí tiene fallback explícito.
+                    <span className="repartidor-stop-link repartidor-stop-link--missing">📍 Sin dirección registrada</span>
                   )}
                   {stop.delivery_note && <p className="repartidor-stop-note">📝 {stop.delivery_note}</p>}
                   {stop.delivery_status === "reprogramado" && (
@@ -471,7 +552,7 @@ export function RepartidorView({ onLogout: onLogoutProp }: Props) {
                     <p className="import-status">Este pedido fue reprogramado a otra instancia — ya no se puede modificar acá.</p>
                   )}
                   <div className="repartidor-stop-actions">
-                    {(Object.keys(STATUS_LABELS) as DeliveryStatus[]).map((status) => (
+                    {MANUALLY_SELECTABLE_STATUSES.map((status) => (
                       <button
                         key={status}
                         type="button"

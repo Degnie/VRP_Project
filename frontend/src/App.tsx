@@ -5,18 +5,23 @@ import type { ClientGroup, InstanceRequest, SolutionResponse } from "./lib/types
 import { readStored, writeStored, clearStored } from "./lib/storage";
 import { loadCoverageZone, saveCoverageZone, clearCoverageZone } from "./lib/coverageZone";
 import { getSession, clearSession, type AuthSession } from "./lib/auth";
-import { InstanceForm } from "./components/InstanceForm";
-import { SolutionSummary } from "./components/SolutionSummary";
 import { HealthBadge } from "./components/HealthBadge";
-import { CoverageZoneEditor } from "./components/CoverageZoneEditor";
 import { LoginForm } from "./components/LoginForm";
-import { RepartidorView } from "./components/RepartidorView";
-import { TeamManagement } from "./components/TeamManagement";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import "./App.css";
 
 const RouteMap = lazy(() => import("./components/RouteMap").then((m) => ({ default: m.RouteMap })));
+// Bug real (Ronda 4, ciclo nuevo, repartidor): estos componentes (~1800
+// líneas + @turf/*) solo los usa el rol dueño/operario, pero al importarlos
+// de forma estática quedaban en el mismo chunk que RepartidorView — un
+// repartidor en 2G/datos limitados tenía que descargar y parsear código de
+// pantallas que su rol nunca renderiza antes de llegar a "Mi ruta".
+const RepartidorView = lazy(() => import("./components/RepartidorView").then((m) => ({ default: m.RepartidorView })));
+const InstanceForm = lazy(() => import("./components/InstanceForm").then((m) => ({ default: m.InstanceForm })));
+const SolutionSummary = lazy(() => import("./components/SolutionSummary").then((m) => ({ default: m.SolutionSummary })));
+const CoverageZoneEditor = lazy(() => import("./components/CoverageZoneEditor").then((m) => ({ default: m.CoverageZoneEditor })));
+const TeamManagement = lazy(() => import("./components/TeamManagement").then((m) => ({ default: m.TeamManagement })));
 
 const INSTANCE_STORAGE_KEY = "vrp:last-instance";
 const SOLUTION_STORAGE_KEY = "vrp:last-solution";
@@ -33,6 +38,7 @@ function App() {
   const [showTeamManagement, setShowTeamManagement] = useState(false);
   const [overwriteConfirm, setOverwriteConfirm] = useState<{ request: InstanceRequest; clients: ClientGroup[] } | null>(null);
   const [coverageSyncError, setCoverageSyncError] = useState<string | null>(null);
+  const [persistWarning, setPersistWarning] = useState<string | null>(null);
 
   useEffect(() => {
     if (!session) return;
@@ -49,9 +55,22 @@ function App() {
       // Persistir solo tras un solve exitoso: guardar en el submit permitía que una
       // instancia inválida (rechazada por el backend) quedara pegada en localStorage
       // y se restaurara en cada carga, incluso tras reiniciar el servidor.
-      writeStored(INSTANCE_STORAGE_KEY, request);
-      writeStored(SOLUTION_STORAGE_KEY, data);
-      if (pendingContacts) writeStored(CONTACTS_STORAGE_KEY, pendingContacts);
+      const instanceOk = writeStored(INSTANCE_STORAGE_KEY, request);
+      const solutionOk = writeStored(SOLUTION_STORAGE_KEY, data);
+      const contactsOk = pendingContacts ? writeStored(CONTACTS_STORAGE_KEY, pendingContacts) : true;
+      // Bug real (Ronda 3, ciclo nuevo, dueño): igual que saveSession ya hace
+      // para el login, hay que avisar si esto no persistió — con una
+      // instancia grande (el propio repo trae ejemplo_500.vrp/ejemplo_50000.vrp
+      // como casos reales) el payload puede superar la cuota de localStorage.
+      // Sin este aviso, la ruta se ve bien en el momento pero desaparece sin
+      // explicación al volver más tarde o recargar.
+      if (!instanceOk || !solutionOk || !contactsOk) {
+        setPersistWarning(
+          "La ruta se resolvió bien, pero no se pudo guardar localmente para recuperarla si recargás la página (memoria del navegador llena o bloqueada)."
+        );
+      } else {
+        setPersistWarning(null);
+      }
     },
   });
 
@@ -102,11 +121,18 @@ function App() {
   };
 
   const handleRedrawCoverage = () => {
-    setCoveragePoints([]);
+    // Bug real (Ronda 2, ciclo nuevo, dueño): el polígono se borraba del
+    // mapa de forma optimista antes de saber si el DELETE tenía éxito — si
+    // fallaba (ej. corte de red), el mapa quedaba sin zona visible mientras
+    // el backend todavía la tenía guardada, sin ningún indicio salvo un
+    // texto de error fácil de no leer. Se espera la confirmación del
+    // borrado, igual que handleCloseCoveragePolygon ya hace con el guardado.
     setCoverageSyncError(null);
-    clearCoverageZone().catch(() =>
-      setCoverageSyncError("No se pudo borrar la zona de cobertura guardada — revisá tu conexión e intentá de nuevo.")
-    );
+    clearCoverageZone()
+      .then(() => setCoveragePoints([]))
+      .catch(() =>
+        setCoverageSyncError("No se pudo borrar la zona de cobertura guardada — revisá tu conexión e intentá de nuevo.")
+      );
   };
 
   const handleLogout = () => {
@@ -159,11 +185,16 @@ function App() {
   // ver su ruta asignada y marcar entregas, en un layout pensado para el celular
   // en la calle, no el sidebar+mapa de escritorio del dueño/operario.
   if (session.role === "repartidor") {
-    return <RepartidorView onLogout={handleLogout} />;
+    return (
+      <Suspense fallback={<div className="map-loading">Cargando…</div>}>
+        <RepartidorView onLogout={handleLogout} />
+      </Suspense>
+    );
   }
 
   return (
-    <div className="app-shell">
+    <Suspense fallback={<div className="map-loading">Cargando…</div>}>
+      <div className="app-shell">
       <header className="app-header">
         <h1>VRP Solver</h1>
         <div className="app-header-actions">
@@ -208,6 +239,12 @@ function App() {
             {solveMutation.isError && (
               <p className="error-message" role="alert">
                 {(solveMutation.error as Error).message}
+              </p>
+            )}
+
+            {persistWarning && (
+              <p className="error-message" role="alert">
+                {persistWarning}
               </p>
             )}
 
@@ -273,6 +310,7 @@ function App() {
         }}
       />
     </div>
+    </Suspense>
   );
 }
 

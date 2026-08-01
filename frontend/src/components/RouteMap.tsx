@@ -230,6 +230,14 @@ export function RouteMap({ instance, solution, editingCoverage, coveragePoints, 
             "line-color": ["get", "color"],
             "line-width": 3,
             "line-opacity": 0.85,
+            // Bug real (Ronda 13, ciclo nuevo, dueño): sin OSRM, la línea
+            // recta placeholder (dibujada antes de saber si OSRM va a
+            // responder) nunca se reemplazaba por geometría real y quedaba
+            // idéntica visualmente a una ruta real por calles — el dueño
+            // podía imprimir/compartir un mapa con líneas rectas atravesando
+            // manzanas creyendo que era el recorrido real. Punteado cuando
+            // se sabe que la solución no usó OSRM.
+            "line-dasharray": ["case", ["==", ["get", "approximate"], true], ["literal", [2, 2]], ["literal", [1, 0]]],
           },
         });
       }
@@ -269,10 +277,16 @@ export function RouteMap({ instance, solution, editingCoverage, coveragePoints, 
         ]);
 
         // Línea recta de inmediato para no dejar el mapa sin rutas mientras
-        // se espera la geometría real de calle.
+        // se espera la geometría real de calle. Si ya se sabe que la
+        // solución no usó OSRM (used_osrm=false), esta línea recta punteada
+        // ES el resultado final — no tiene sentido reintentar OSRM.
         const straightFeatures = solution.routes.map((route, i) => ({
           type: "Feature" as const,
-          properties: { vehicle_id: route.vehicle_id, color: ROUTE_COLORS[i % ROUTE_COLORS.length] },
+          properties: {
+            vehicle_id: route.vehicle_id,
+            color: ROUTE_COLORS[i % ROUTE_COLORS.length],
+            approximate: !solution.used_osrm,
+          },
           geometry: { type: "LineString" as const, coordinates: waypointsByRoute[i] },
         }));
         (map.getSource("route-lines") as maplibregl.GeoJSONSource).setData({
@@ -280,17 +294,19 @@ export function RouteMap({ instance, solution, editingCoverage, coveragePoints, 
           features: straightFeatures,
         });
 
-        // Reemplazar por geometría real de calle (vía OSRM) apenas llegue cada tramo.
-        Promise.all(waypointsByRoute.map((wp) => fetchRouteGeometry(wp))).then((geometries) => {
-          if (cancelled) return;
-          const routedFeatures = solution.routes.map((route, i) => ({
-            type: "Feature" as const,
-            properties: { vehicle_id: route.vehicle_id, color: ROUTE_COLORS[i % ROUTE_COLORS.length] },
-            geometry: { type: "LineString" as const, coordinates: geometries[i] },
-          }));
-          const source = map.getSource("route-lines") as maplibregl.GeoJSONSource | undefined;
-          source?.setData({ type: "FeatureCollection", features: routedFeatures });
-        });
+        if (solution.used_osrm) {
+          // Reemplazar por geometría real de calle (vía OSRM) apenas llegue cada tramo.
+          Promise.all(waypointsByRoute.map((wp) => fetchRouteGeometry(wp))).then((geometries) => {
+            if (cancelled) return;
+            const routedFeatures = solution.routes.map((route, i) => ({
+              type: "Feature" as const,
+              properties: { vehicle_id: route.vehicle_id, color: ROUTE_COLORS[i % ROUTE_COLORS.length], approximate: false },
+              geometry: { type: "LineString" as const, coordinates: geometries[i] },
+            }));
+            const source = map.getSource("route-lines") as maplibregl.GeoJSONSource | undefined;
+            source?.setData({ type: "FeatureCollection", features: routedFeatures });
+          });
+        }
       } else {
         (map.getSource("route-lines") as maplibregl.GeoJSONSource).setData({
           type: "FeatureCollection",

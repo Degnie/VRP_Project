@@ -27,7 +27,7 @@ export function buildRouteCsv(
       stopNumber += 1;
       const contact = contacts?.[clientIndex - 1];
       rows.push([
-        String(route.vehicle_id),
+        String(route.vehicle_id + 1),
         String(stopNumber),
         `Cliente #${clientIndex}`,
         contact?.customerName ?? "",

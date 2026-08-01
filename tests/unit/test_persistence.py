@@ -226,7 +226,7 @@ class TestFullPersistencePipeline:
             pg_adapter.save_instance(instance)
 
             # Solve
-            solution = solve_instance(instance)
+            solution, _ = solve_instance(instance)
 
             # Persist solution (MongoDB)
             mongo_adapter.save_solution(solution, {"phase": "Phase 2"})

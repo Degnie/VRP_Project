@@ -36,6 +36,38 @@ class TestAuthFlow:
         assert body["role"] == "dueño"
         assert "access_token" in body
 
+    def test_register_rejects_short_password(self):
+        """Bug real (Ronda 21, ciclo nuevo, dueño): no había ninguna longitud
+        mínima de contraseña en todo el stack — un dueño podía crear su
+        cuenta de negocio con una contraseña de un solo carácter."""
+        client = self._client()
+        response = client.post("/auth/register", json={
+            "account_name": "Empresa Corta",
+            "email": self._unique_email("cortapass"),
+            "password": "1234567",  # 7 chars, por debajo del mínimo de 8
+        })
+        assert response.status_code == 422
+
+    def test_create_user_rejects_short_password(self):
+        client = self._client()
+        owner_token = self._client_register_owner()
+
+        response = client.post(
+            "/auth/users",
+            json={"email": self._unique_email("repacorta"), "password": "abc", "role": "repartidor"},
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        assert response.status_code == 422
+
+    def _client_register_owner(self) -> str:
+        client = self._client()
+        response = client.post("/auth/register", json={
+            "account_name": "Empresa Owner Helper",
+            "email": self._unique_email("ownerhelper"),
+            "password": "clave-segura-123",
+        })
+        return response.json()["access_token"]
+
     def test_register_duplicate_email_rejected(self):
         client = self._client()
         email = self._unique_email("dup")

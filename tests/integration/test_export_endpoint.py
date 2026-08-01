@@ -64,6 +64,33 @@ class TestExportEndpoint:
         assert response.headers["content-type"] == "application/pdf"
         assert response.content.startswith(b"%PDF-")
 
+    def test_export_pdf_with_quote_in_instancia_id_does_not_break_header(self):
+        """Bug real (Ronda 10, ciclo nuevo, dueño): "ID de instancia" es texto
+        libre sin restricciones en el formulario, pero se interpolaba crudo en
+        el header Content-Disposition — una comilla embebida (ej. 'Instancia
+        "Norte"') lo deja mal formado, cortando el parámetro filename a mitad
+        y produciendo un nombre de archivo impredecible en el navegador."""
+        client = self._client()
+        token = self._register_owner(client, "Export Co Special Chars")
+        instancia_id = 'raro"con-comillas'
+        assert self._solve_with_contacts(client, token, instancia_id).status_code == 200
+
+        response = client.get(
+            f"/solutions/{instancia_id}/export.pdf", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 200
+        assert response.content.startswith(b"%PDF-")
+        assert response.headers["content-disposition"] == 'attachment; filename="ruta_raro_con-comillas.pdf"'
+
+    def test_safe_filename_component_strips_newlines_and_quotes(self):
+        """Complemento del test anterior: un salto de línea embebido en el ID
+        de instancia ni siquiera puede viajar en una URL HTTP real (rechazado
+        antes de llegar al servidor) — se prueba la función de saneo
+        directamente para cubrir ese caso sin depender del transporte HTTP."""
+        from backend_python.api import _safe_filename_component
+
+        assert _safe_filename_component('raro"con-salto\ny-comillas') == "raro_con-salto_y-comillas"
+
     def test_export_pdf_filters_by_vehicle_id(self):
         client = self._client()
         token = self._register_owner(client, "Export Co B")

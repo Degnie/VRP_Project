@@ -347,7 +347,7 @@ class TestEndToEndFlow:
         instance = Instancia("test_e2e", depot, flota, clientes)
 
         # Solve (should use Python fallback if no C++)
-        solution = solve_instance(instance)
+        solution, _ = solve_instance(instance)
 
         # Validate solution
         assert solution is not None
@@ -374,7 +374,7 @@ class TestEndToEndFlow:
         clientes = [Cliente(1, Coordinate(0.0, 0.0), 10)]
         instance = Instancia("test_zero_cost", depot, flota, clientes)
 
-        solution = solve_instance(instance)
+        solution, _ = solve_instance(instance)
 
         assert solution is not None
         assert solution.costo_total == 0.0

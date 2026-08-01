@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { DeliveryStatus } from "../lib/types";
 import { api } from "../lib/api";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -54,6 +54,14 @@ export function DeliveryStatusControl({
   const [note, setNote] = useState<string | undefined>(initialNote);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  // Bug real (Ronda 8, ciclo nuevo, operario): mismo patrón que en
+  // SolutionSummary — el setTimeout del badge "Guardado" no se limpiaba al
+  // desmontar, dejando un timer huérfano que puede disparar setState sobre
+  // un componente ya desmontado (no-op silencioso, pero timer sin limpiar).
+  const savedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (savedTimeoutRef.current) clearTimeout(savedTimeoutRef.current);
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const [pendingStatus, setPendingStatus] = useState<DeliveryStatus | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
@@ -68,7 +76,7 @@ export function DeliveryStatusControl({
       await api.updateDeliveryStatus(instanciaId, clientId, next, nextNote);
       setNote(nextNote);
       setSaved(true);
-      setTimeout(() => setSaved(false), 1500);
+      savedTimeoutRef.current = setTimeout(() => setSaved(false), 1500);
     } catch (err) {
       const message = (err as Error).message;
       // Bug real (Ronda 51): un timeout (o cualquier fallo de RED, no un
@@ -147,7 +155,16 @@ export function DeliveryStatusControl({
         }
         onCancel={() => setPendingStatus(null)}
         onConfirm={() => {
-          if (pendingStatus) applyChange(pendingStatus, noteDraft.trim() || undefined);
+          // Bug real (Ronda 1, ciclo nuevo): mismo bug ya arreglado en
+          // RepartidorView.tsx (Ronda 43) pero nunca aplicado acá — handleChange
+          // precarga noteDraft con la nota YA EXISTENTE (para no perderla de
+          // vista al reabrir el mismo estado con nota), pero eso viajaba igual
+          // en transiciones hacia un estado que no admite nota (ej. Rechazado
+          // con nota → Entregado), aunque el textarea nunca se muestra ahí.
+          if (pendingStatus) {
+            const note = NOTE_PROMPT_STATUSES.includes(pendingStatus) ? noteDraft.trim() || undefined : undefined;
+            applyChange(pendingStatus, note);
+          }
           setPendingStatus(null);
         }}
       >

@@ -32,6 +32,20 @@ export function InstanceForm({ onSubmit, isSolving, coveragePoints }: Props) {
   const [groups, setGroups] = useState<ClientGroup[]>([emptyGroup("row-0"), emptyGroup("row-1"), emptyGroup("row-2")]);
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // Bug real (Ronda 9, ciclo nuevo, dueño): el aviso de volumen es puramente
+  // informativo (el solver es peso-only, no bloquea el envío — ver comentario
+  // más abajo), pero compartía el mismo state y la misma clase visual de
+  // error rojo/role="alert" que los errores que SÍ bloquean el submit. Un
+  // dueño con flota mixta lo veía en cada pedido normal (volumen de un
+  // cliente > vehículo más chico, pero cubierto por uno más grande),
+  // entrenándolo a ignorar carteles rojos — riesgo para cuando aparezca un
+  // error real. Se separa a su propio state con estilo neutro.
+  const [volumeWarning, setVolumeWarning] = useState<string | null>(null);
+  // Bug real (Ronda 9, ciclo nuevo, operario): igual que el aviso de volumen,
+  // este es informativo y no bloquea — cuenta clientes descartados del
+  // submit por no tener X/Y o estar fuera de cobertura (a diferencia del
+  // import CSV, que ya avisa filas omitidas, la carga manual no lo hacía).
+  const [skippedClientsWarning, setSkippedClientsWarning] = useState<string | null>(null);
   const [vehicleTypes, setVehicleTypes] = useState<VehicleType[]>([]);
   const [fleet, setFleet] = useState<FleetSelectionEntry[]>([]);
   const [expandedClientId, setExpandedClientId] = useState<string | null>(null);
@@ -278,6 +292,7 @@ export function InstanceForm({ onSubmit, isSolving, coveragePoints }: Props) {
     // en la UI de React. reportValidity() fuerza el tooltip nativo del
     // navegador a aparecer sobre el campo exacto, en vez de un botón que
     // simplemente no hace nada.
+    setVolumeWarning(null);
     if (!e.currentTarget.checkValidity()) {
       e.currentTarget.reportValidity();
       setSubmitError("Hay un dato inválido en el formulario — revisá los campos resaltados en rojo.");
@@ -291,6 +306,12 @@ export function InstanceForm({ onSubmit, isSolving, coveragePoints }: Props) {
       );
       return;
     }
+    const skippedCount = groups.length - validGroups.length;
+    setSkippedClientsWarning(
+      skippedCount > 0
+        ? `${skippedCount} cliente${skippedCount === 1 ? "" : "s"} sin X/Y cargados o fuera de cobertura quedó${skippedCount === 1 ? "" : "n"} fuera de esta resolución.`
+        : null
+    );
 
     if (simpleMode) {
       const demands = validGroups.map((g) =>
@@ -344,7 +365,8 @@ export function InstanceForm({ onSubmit, isSolving, coveragePoints }: Props) {
     }
     // Volumen es informativo (el solver no lo usa, solo peso) — se avisa pero
     // no bloquea, para no impedir instancias que sí son resolubles por peso.
-    setSubmitError(volumeWarnings.length > 0 ? volumeWarnings.join(" ") : null);
+    setSubmitError(null);
+    setVolumeWarning(volumeWarnings.length > 0 ? volumeWarnings.join(" ") : null);
     onSubmit(request, validGroups);
   };
 
@@ -604,6 +626,8 @@ export function InstanceForm({ onSubmit, isSolving, coveragePoints }: Props) {
           {submitError}
         </p>
       )}
+      {volumeWarning && <p className="volume-warning-message">{volumeWarning}</p>}
+      {skippedClientsWarning && <p className="volume-warning-message">{skippedClientsWarning}</p>}
 
       <button
         type="submit"

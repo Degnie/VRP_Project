@@ -215,6 +215,36 @@ class TestOrderLifecycle:
         )
         assert response.status_code == 409
 
+    def test_update_client_atomic_guard_rejects_race_with_concurrent_reschedule(self):
+        """Bug real (Ronda 15, ciclo nuevo, operario): update_client hacía el
+        UPDATE sin guard de delivery_status en el WHERE — el endpoint
+        chequeaba "no reprogramado" con un SELECT SEPARADO antes de llamarlo,
+        así que si un reschedule_instance concurrente marcaba al cliente
+        como reprogramado DESPUÉS de ese chequeo pero ANTES del UPDATE, la
+        edición se aplicaba igual sobre un pedido que ya no pertenece a la
+        instancia activa, sin ningún aviso. Se prueba el adapter directo
+        (sin pasar por el chequeo previo del endpoint) para aislar que el
+        guard atómico del propio UPDATE es el que realmente protege."""
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle EditClientRace")
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_token, instancia_id)
+        client.post(f"/instances/{instancia_id}/reschedule", headers={"Authorization": f"Bearer {owner_token}"})
+
+        from backend_python.persistence.postgres_adapter import PostgreSQLAdapter
+        from backend_python.config import get_config
+        from backend_python.api import _namespaced_id
+
+        me = client.get("/auth/me", headers={"Authorization": f"Bearer {owner_token}"}).json()
+        namespaced_id = _namespaced_id(me["account_id"], instancia_id)
+
+        adapter = PostgreSQLAdapter(get_config().DATABASE_URL)
+        try:
+            updated = adapter.update_client(namespaced_id, 1, 1.0, 1.0, 10, None, None, None)
+        finally:
+            adapter.close()
+        assert updated is False
+
     def test_update_client_404_for_unknown_client(self):
         client = self._client()
         owner_token = self._register_owner(client, "Lifecycle EditClient404")
@@ -240,6 +270,26 @@ class TestOrderLifecycle:
             headers={"Authorization": f"Bearer {owner_token}"},
         )
         assert response.status_code == 422
+
+    def test_update_client_zero_demand_gives_spanish_error(self):
+        """Bug real (Ronda 19, ciclo nuevo, dueño): mismo patrón que
+        VehicleTypeRequest.weight_capacity_kg (Ronda 18) — Field(gt=0) sin
+        validador propio dejaba pasar el mensaje crudo de Pydantic en inglés
+        ("Input should be greater than 0") si demand llegaba en 0."""
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle EditClientZeroDemand")
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_token, instancia_id)
+
+        response = client.patch(
+            f"/instances/{instancia_id}/clients/1",
+            json={"x": 10.0, "y": 10.0, "demand": 0},
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        assert response.status_code == 422
+        detail = str(response.json()["detail"])
+        assert "Input should be greater than" not in detail
+        assert "mayor a 0" in detail
 
     def test_update_client_requires_dueno_or_operario(self):
         client = self._client()
@@ -282,6 +332,43 @@ class TestOrderLifecycle:
 
         response = client.delete(f"/instances/{instancia_id}", headers={"Authorization": f"Bearer {owner_token}"})
         assert response.status_code == 200
+
+        list_after = client.get("/instances", headers={"Authorization": f"Bearer {owner_token}"})
+        assert instancia_id not in [i["id"] for i in list_after.json()]
+
+    def test_resolve_existing_does_not_resurrect_instance_deleted_mid_solve(self):
+        """Bug real (Ronda 17, ciclo nuevo, dueño): POST /instances/{id}/solve
+        carga la instancia, corre el solve (puede tardar segundos con
+        instancias grandes), y recién después llama a save_instance — un
+        upsert incondicional (INSERT ... ON CONFLICT DO UPDATE). Si un
+        DELETE /instances/{id} concurrente terminaba MIENTRAS el solve
+        seguía en vuelo, el save_instance final "resucitaba" la instancia
+        borrada, reapareciendo en GET /instances sin ningún error en
+        ninguno de los dos flujos. Se simula la carrera borrando la
+        instancia DESDE DENTRO del mock de solve_instance, en el punto
+        exacto donde correría si las requests estuvieran intercaladas."""
+        from unittest.mock import patch
+
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle ResolveDeleteRace")
+        instancia_id = f"lc-resolvedelete-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_token, instancia_id)
+
+        import backend_python.api as api_module
+        original_solve_instance = api_module.solve_instance
+
+        def racing_solve_instance(instance):
+            delete_response = client.delete(
+                f"/instances/{instancia_id}", headers={"Authorization": f"Bearer {owner_token}"}
+            )
+            assert delete_response.status_code == 200
+            return original_solve_instance(instance)
+
+        with patch.object(api_module, "solve_instance", racing_solve_instance):
+            response = client.post(
+                f"/instances/{instancia_id}/solve", headers={"Authorization": f"Bearer {owner_token}"}
+            )
+        assert response.status_code == 404
 
         list_after = client.get("/instances", headers={"Authorization": f"Bearer {owner_token}"})
         assert instancia_id not in [i["id"] for i in list_after.json()]
@@ -377,6 +464,42 @@ class TestOrderLifecycle:
         )
 
         response = self._assign(client, owner_token, instancia_id, {"0": repartidor_id, "1": repartidor_id})
+        assert response.status_code == 422
+
+    def test_solve_fails_loudly_if_mongo_save_fails(self):
+        """Bug real (Ronda 4, ciclo nuevo, operario): si mongo_adapter.save_solution
+        fallaba, _solve_and_persist solo logueaba un warning y devolvía 200 —
+        Postgres ya tenía la topología nueva pero Mongo se quedaba con la
+        solución VIEJA, sin ningún aviso. Todo lector de Mongo (GET
+        /solutions, export PDF, my-route, update_delivery_status) pasaba a
+        mostrar/validar contra datos obsoletos en silencio. Ahora se propaga
+        como error real en vez de tragárselo."""
+        from unittest.mock import patch
+        from backend_python.persistence.mongodb_adapter import MongoDBAdapter
+
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle MongoFail")
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+
+        with patch.object(MongoDBAdapter, "save_solution", return_value=False):
+            response = self._solve_instance(client, owner_token, instancia_id)
+        assert response.status_code == 503
+
+    def test_set_assignments_rejects_user_that_is_not_repartidor(self):
+        """Bug real (Ronda 2, ciclo nuevo, operario): set_assignments validaba
+        que el user_id exista y sea de la misma cuenta, pero nunca que su rol
+        fuera "repartidor" — un dueño/operario podía quedar asignado como
+        repartidor de una ruta vía llamada directa al endpoint (la UI ya
+        filtra el <select>, pero el backend no lo exigía)."""
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle AssignRoleGuard")
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_token, instancia_id)
+
+        me = client.get("/auth/me", headers={"Authorization": f"Bearer {owner_token}"})
+        owner_id = me.json()["id"]
+
+        response = self._assign(client, owner_token, instancia_id, {"0": owner_id})
         assert response.status_code == 422
 
     def test_route_assignments_unique_constraint_rejects_duplicate_at_db_level(self):
@@ -791,6 +914,115 @@ class TestOrderLifecycle:
         )
         assert response.status_code == 404
 
+    def test_repartidor_delivery_statuses_scoped_to_own_route(self):
+        """Bug real (Ronda 21, ciclo nuevo, repartidor): a diferencia de
+        get_my_route/update_delivery_status/export_solution_pdf,
+        get_delivery_statuses no restringía al repartidor a los clientes de
+        SU propia ruta — podía pedir el estado/nota de TODOS los clientes de
+        la instancia, incluidas rutas ajenas (las notas suelen tener datos
+        sensibles del domicilio)."""
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle DeliveryStatusScope")
+        repartidor_token, repartidor_id = self._register_repartidor(client, owner_token)
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+        solve_res = client.post(
+            "/solve",
+            json={
+                "instancia_id": instancia_id,
+                "coordinates": [(10, 10), (20, 20), (30, 30), (40, 40)],
+                "demands": [60, 60, 60, 60],
+                "num_vehicles": 2,
+                "vehicle_capacity": 130,
+                "depot_coordinates": (0, 0),
+            },
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        assert solve_res.status_code == 200
+        self._assign(client, owner_token, instancia_id, {"0": repartidor_id})
+
+        response = client.get(
+            f"/instances/{instancia_id}/delivery-statuses",
+            headers={"Authorization": f"Bearer {repartidor_token}"},
+        )
+        assert response.status_code == 200
+        my_route = client.get(
+            f"/instances/{instancia_id}/my-route",
+            headers={"Authorization": f"Bearer {repartidor_token}"},
+        ).json()
+        allowed_ids = {str(stop["client_id"]) for stop in my_route["stops"]}
+        assert allowed_ids != {"1", "2", "3", "4"}, "el test necesita que las 2 rutas no cubran ambas todos los clientes"
+        assert set(response.json().keys()) == allowed_ids
+
+    def test_repartidor_delivery_statuses_403_without_assignment(self):
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle DeliveryStatusNoAssign")
+        repartidor_token, _ = self._register_repartidor(client, owner_token)
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_token, instancia_id)
+
+        response = client.get(
+            f"/instances/{instancia_id}/delivery-statuses",
+            headers={"Authorization": f"Bearer {repartidor_token}"},
+        )
+        assert response.status_code == 403
+
+    def test_reschedule_reflects_client_edit_that_lands_between_snapshot_and_move(self):
+        """Bug real (Ronda 17, ciclo nuevo, operario): reschedule_instance
+        leía los clientes pendientes UNA vez en memoria (get_pending_clients)
+        y usaba ese snapshot para armar la instancia nueva, sin volver a leer
+        después de mark_clients_rescheduled — un PATCH /clients/{id} que
+        editara un dato (ej. corregir la dirección) DESPUÉS de ese snapshot
+        pero ANTES/DURANTE el guard atómico del reschedule se perdía en
+        silencio: ambos requests devolvían 200, pero la instancia nueva
+        conservaba el dato VIEJO. Se simula la carrera editando el cliente
+        DESDE DENTRO del mock de mark_clients_rescheduled, en el punto
+        exacto donde correría si las requests estuvieran intercaladas."""
+        from unittest.mock import patch
+
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle RescheduleEditRace")
+        instancia_id = f"lc-rescheduleeditrace-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_token, instancia_id)
+
+        from backend_python.persistence.postgres_adapter import PostgreSQLAdapter
+        original_mark_clients_rescheduled = PostgreSQLAdapter.mark_clients_rescheduled
+
+        def racing_mark_clients_rescheduled(self, namespaced_id_arg, cliente_ids, new_namespaced_id_arg):
+            patch_response = client.patch(
+                f"/instances/{instancia_id}/clients/1",
+                json={"x": 10.0, "y": 10.0, "address": "Dirección corregida en la carrera"},
+                headers={"Authorization": f"Bearer {owner_token}"},
+            )
+            assert patch_response.status_code == 200
+            return original_mark_clients_rescheduled(self, namespaced_id_arg, cliente_ids, new_namespaced_id_arg)
+
+        with patch.object(PostgreSQLAdapter, "mark_clients_rescheduled", racing_mark_clients_rescheduled):
+            response = client.post(
+                f"/instances/{instancia_id}/reschedule",
+                headers={"Authorization": f"Bearer {owner_token}"},
+            )
+        assert response.status_code == 200
+        new_instancia_id = response.json()["new_instancia_id"]
+
+        # La instancia NUEVA (la que se arma con new_clientes) es donde el
+        # bug se manifestaba: sin el fix, quedaba con la dirección VIEJA
+        # (capturada en el snapshot get_pending_clients, antes del PATCH).
+        from backend_python.config import get_config
+        from backend_python.persistence.postgres_adapter import PostgreSQLAdapter as PGA
+        from backend_python.api import _namespaced_id
+
+        account_id = client.get("/auth/me", headers={"Authorization": f"Bearer {owner_token}"}).json()["account_id"]
+        namespaced_new = _namespaced_id(account_id, new_instancia_id)
+
+        adapter = PGA(get_config().DATABASE_URL)
+        try:
+            new_instance = adapter.load_instance(namespaced_new, account_id=account_id)
+        finally:
+            adapter.close()
+        assert new_instance is not None
+        edited_client = next(c for c in new_instance.clientes if c.id == 1)
+        assert edited_client.address == "Dirección corregida en la carrera"
+
     def test_reschedule_creates_new_instance_with_pending_only(self):
         client = self._client()
         owner_token = self._register_owner(client, "Lifecycle H")
@@ -901,6 +1133,51 @@ class TestOrderLifecycle:
         solution = client.get(f"/solutions/{new_instancia_id}", headers={"Authorization": f"Bearer {owner_token}"})
         all_client_ids = {c for ruta in solution.json()["routes"] for c in ruta["sequence"]}
         assert all_client_ids == {2, 3, 4, 5}
+
+    def test_set_assignments_rejects_write_if_instance_was_resolved_again_mid_request(self):
+        """Bug real (Ronda 16, ciclo nuevo, dueño): set_assignments validaba
+        vehicle_id contra la solución UNA vez, al principio del request, pero
+        escribía sin volver a chequear — si un "Resolver de nuevo" concurrente
+        terminaba (y por diseño invalida SIEMPRE las asignaciones existentes)
+        entre esa validación y el write, este endpoint podía pisar la
+        invalidación con datos ya obsoletos en silencio, dejando un
+        repartidor asignado a un vehicle_id con una secuencia de paradas que
+        ya no es la real. Se simula la carrera mockeando load_solution para
+        que devuelva una topología distinta en la segunda lectura (la que
+        pasa justo antes de escribir) — mismo efecto que un re-solve
+        concurrente terminando en esa ventana, sin arriesgar un deadlock real
+        de threads/locks en el test."""
+        from unittest.mock import patch
+
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle AssignRace")
+        repartidor_token, repartidor_id = self._register_repartidor(client, owner_token)
+        instancia_id = f"lc-assignrace-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_token, instancia_id)
+
+        from backend_python.persistence.mongodb_adapter import MongoDBAdapter
+        from backend_python.models import Ruta, Solucion
+
+        original_load_solution = MongoDBAdapter.load_solution
+        call_count = {"n": 0}
+
+        def racing_load_solution(self, instancia_id_arg, timestamp=None):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return original_load_solution(self, instancia_id_arg, timestamp)
+            # Segunda lectura (justo antes de escribir): simula que un
+            # re-solve concurrente ya terminó con una topología distinta
+            # (vehicle_id 5 en vez de 0 — ninguna asignación previa sigue siendo válida).
+            return Solucion(
+                instancia_id=instancia_id_arg,
+                rutas=[Ruta(vehicle_id=5, secuencia=[1, 2], costo=1.0)],
+                costo_total=1.0,
+            )
+
+        with patch.object(MongoDBAdapter, "load_solution", racing_load_solution):
+            response = self._assign(client, owner_token, instancia_id, {"0": repartidor_id})
+
+        assert response.status_code == 409
 
     def test_resolving_same_instance_invalidates_stale_assignments(self):
         """Bug real: NN/SA puede recomponer completamente qué clientes caen
@@ -1027,6 +1304,66 @@ class TestOrderLifecycle:
         summaries = client.get("/instances", headers={"Authorization": f"Bearer {owner_token}"}).json()
         new_summary = next(s for s in summaries if s["id"] == new_instancia_id)
         assert new_summary["num_clients"] == 2
+
+    def test_solve_response_reports_used_osrm_false_when_unavailable(self, monkeypatch):
+        """Bug real (Ronda 13, ciclo nuevo, dueño y operario, hallado
+        independientemente por ambos): la respuesta de /solve no exponía si
+        el costo/secuencia se calcularon con OSRM o con fallback euclídeo —
+        el dueño veía el mismo total_cost sea cual sea el caso, sin aviso."""
+        from backend_python.config import config as global_config
+
+        monkeypatch.setattr(global_config, "OSRM_URL", "")
+
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle UsedOsrmFalse")
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+
+        response = self._solve_instance(client, owner_token, instancia_id)
+        assert response.status_code == 200
+        assert response.json()["used_osrm"] is False
+
+    def test_reschedule_cleans_up_placeholder_if_postgres_fails_mid_flow(self):
+        """Bug real (Ronda 3, ciclo nuevo, operario): reschedule_instance crea
+        un placeholder de 0 clientes ANTES de mark_clients_rescheduled (la FK
+        de rescheduled_to_instancia_id lo exige). Si Postgres falla justo
+        entre esos dos pasos (corte de conexión, timeout), el placeholder
+        quedaba huérfano para siempre — a diferencia del caso de "perdió la
+        carrera" (moved_ids vacío), que sí lo limpiaba."""
+        from unittest.mock import patch
+        from backend_python.persistence.postgres_adapter import psycopg2
+
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle Reschedule DBFail")
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_token, instancia_id)
+
+        with patch(
+            "backend_python.persistence.postgres_adapter.PostgreSQLAdapter.mark_clients_rescheduled",
+            side_effect=psycopg2.Error("simulated connection loss"),
+        ):
+            # El TestClient re-lanza excepciones no manejadas por defecto
+            # (raise_server_exceptions=True) en vez de devolver el 500 que un
+            # cliente HTTP real vería — lo que importa acá es que la
+            # excepción SIGUE propagándose (no se traga silenciosamente) y
+            # que el placeholder se limpia antes de eso.
+            with pytest.raises(psycopg2.Error):
+                client.post(
+                    f"/instances/{instancia_id}/reschedule",
+                    headers={"Authorization": f"Bearer {owner_token}"},
+                )
+
+        # El placeholder no debe quedar visible como instancia fantasma.
+        summaries = client.get("/instances", headers={"Authorization": f"Bearer {owner_token}"}).json()
+        assert all(not s["id"].startswith(f"{instancia_id}-reprog-") for s in summaries)
+
+        # La instancia original sigue teniendo sus pendientes intactos —
+        # una reprogramación real (sin el mock) ahora sí debe funcionar.
+        retry = client.post(
+            f"/instances/{instancia_id}/reschedule",
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        assert retry.status_code == 200
+        assert retry.json()["rescheduled_client_ids"] == [1, 2]
 
     def test_reschedule_concurrent_requests_never_duplicate_clients(self):
         """Bug real: dos reprogramaciones REALMENTE concurrentes (no

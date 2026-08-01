@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ClientGroup, DeliveryStatus, InstanceRequest, RouteEta, SolutionResponse, TeamMember } from "../lib/types";
 import { fetchRouteWithDuration } from "../lib/osrm";
 import { estimateRouteEtas } from "../lib/eta";
@@ -58,6 +58,12 @@ export function SolutionSummary({ solution, instance, contacts, onSolvedInstance
   const [serviceMinutes, setServiceMinutes] = useState(8);
   const [etas, setEtas] = useState<RouteEta[] | null>(null);
   const [loadingEtas, setLoadingEtas] = useState(false);
+  // Bug real (Ronda 12, ciclo nuevo, dueño): si OSRM no responde, el fallback
+  // silencioso (durationSeconds=0) hacía que los horarios estimados se vean
+  // "normales" pero con tiempo de viaje cero — indistinguible del disclaimer
+  // de "aproximado" ya existente, que cubre otra cosa (la aproximación
+  // esperada del cálculo, no un dato de tiempo de viaje directamente ausente).
+  const [etasUnreliable, setEtasUnreliable] = useState(false);
 
   useEffect(() => {
     if (!instance) {
@@ -78,12 +84,13 @@ export function SolutionSummary({ solution, instance, contacts, onSolvedInstance
           ...route.sequence.map((id) => idToCoord.get(id) ?? instance.depot_coordinates),
           instance.depot_coordinates,
         ];
-        const { coordinates, durationSeconds } = await fetchRouteWithDuration(waypointCoords);
-        return { route, geometry: coordinates, waypointCoords, durationSeconds };
+        const { coordinates, durationSeconds, osrmUnavailable } = await fetchRouteWithDuration(waypointCoords);
+        return { route, geometry: coordinates, waypointCoords, durationSeconds, osrmUnavailable };
       })
     ).then((inputs) => {
       if (cancelled) return;
       setEtas(estimateRouteEtas(inputs, departureTime, serviceMinutes));
+      setEtasUnreliable(inputs.some((i) => i.osrmUnavailable));
       setLoadingEtas(false);
     });
 
@@ -117,6 +124,16 @@ export function SolutionSummary({ solution, instance, contacts, onSolvedInstance
   const [savingAssignments, setSavingAssignments] = useState(false);
   const [assignError, setAssignError] = useState<string | null>(null);
   const [assignSaved, setAssignSaved] = useState(false);
+  // Bug real (Ronda 8, ciclo nuevo, operario): el setTimeout del badge
+  // "Guardado" no se limpiaba al desmontar — SolutionSummary nunca se
+  // remonta al cambiar de instancia (no tiene key en App.tsx), así que si el
+  // operario guardaba asignaciones y cambiaba de instancia dentro de los 2s,
+  // el timer igual disparaba setAssignSaved(false) sobre el estado de la
+  // instancia nueva, un flash del badge desalineado del contexto real.
+  const assignSavedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (assignSavedTimeoutRef.current) clearTimeout(assignSavedTimeoutRef.current);
+  }, []);
 
   useEffect(() => {
     api
@@ -237,7 +254,7 @@ export function SolutionSummary({ solution, instance, contacts, onSolvedInstance
       setAssignments(merged);
       setExplicitlyUnassigned(new Set());
       setAssignSaved(true);
-      setTimeout(() => setAssignSaved(false), 2000);
+      assignSavedTimeoutRef.current = setTimeout(() => setAssignSaved(false), 2000);
     } catch (err) {
       setAssignError((err as Error).message);
     } finally {
@@ -287,7 +304,11 @@ export function SolutionSummary({ solution, instance, contacts, onSolvedInstance
     try {
       const solved = await api.solveExistingInstance(rescheduledPendingSolveId);
       setRescheduleResult(
-        `Instancia "${solved.instancia_id}" resuelta: ${solved.num_routes} ruta(s), costo ${solved.total_cost.toFixed(1)}. Ya podés asignarle un repartidor abajo.`
+        // Bug real (Ronda 6, ciclo nuevo, dueño): total_cost es la distancia
+        // cruda en METROS (misma unidad que usan formatDistanceKm más abajo
+        // en esta pantalla) — .toFixed(1) a secas mostraba "costo 45231.7"
+        // sin unidad, en vez de "45.2 km" como el resto de la pantalla.
+        `Instancia "${solved.instancia_id}" resuelta: ${solved.num_routes} ruta(s), costo ${formatDistanceKm(solved.total_cost)}. Ya podés asignarle un repartidor abajo.`
       );
       setRescheduledPendingSolveId(null);
       onSolvedInstanceChange?.(solved);
@@ -377,6 +398,17 @@ export function SolutionSummary({ solution, instance, contacts, onSolvedInstance
           <span className="stat-label">Rutas</span>
         </div>
       </div>
+      {!solution.used_osrm && (
+        // Bug real (Ronda 13, ciclo nuevo, dueño y operario, hallado
+        // independientemente por ambos): el solver ya caía en silencio a
+        // distancia euclídea si OSRM no estaba disponible, calculando TODO
+        // el costo y la secuencia optimizada sobre línea recta — el número
+        // se veía idéntico a un cálculo con calles reales.
+        <p className="volume-warning-message">
+          El servicio de mapas no estaba disponible al resolver — esta distancia y las rutas se calcularon en línea
+          recta, no sobre calles reales. Puede estar muy alejada del recorrido real.
+        </p>
+      )}
 
       <div className="export-actions">
         {/* Bug real (Ronda 49, ampliado en Ronda 50): exportar CSV/PDF cuando
@@ -489,6 +521,12 @@ export function SolutionSummary({ solution, instance, contacts, onSolvedInstance
         Horario aproximado, no exacto — asume velocidad constante y {serviceMinutes} min por parada. Usalo como
         referencia para avisarle al cliente un rango, no una hora exacta.
       </p>
+      {etasUnreliable && (
+        <p className="volume-warning-message">
+          No se pudo calcular la distancia real de la ruta (servicio de mapas no disponible) — los horarios de abajo
+          no reflejan el tiempo de viaje real, no los uses para avisarle al cliente.
+        </p>
+      )}
 
       <ul className="route-list">
         {solution.routes.map((route, i) => {
@@ -504,7 +542,21 @@ export function SolutionSummary({ solution, instance, contacts, onSolvedInstance
           return (
             <li key={route.vehicle_id} className="route-item">
               <span className="route-swatch" style={{ background: ROUTE_COLORS[i % ROUTE_COLORS.length] }} />
-              <span className="route-label">Vehículo {route.vehicle_id + 1}</span>
+              <span className="route-label">
+                Vehículo {route.vehicle_id + 1}
+                {/* Bug real (Ronda 18, ciclo nuevo, operario): con flota
+                    heterogénea de 3+ tipos, la pantalla de resultados solo
+                    mostraba "Vehículo N" sin ningún indicio de qué tipo/
+                    capacidad le tocó — imposible saber a ojo cuál ruta es la
+                    moto (capacidad chica) para no sobrecargarla al reasignar,
+                    ni para comunicarle al repartidor qué vehículo le toca.
+                    El nombre del tipo no viaja hasta acá (se aplana a un
+                    array de números en buildInstance.ts), pero la capacidad
+                    sí — alcanza para distinguir vehículos a ojo. */}
+                {instance?.vehicle_capacities?.[route.vehicle_id] !== undefined && (
+                  <span className="route-vehicle-capacity"> ({instance.vehicle_capacities[route.vehicle_id]} kg)</span>
+                )}
+              </span>
               <span className="route-cost">{formatDistanceKm(route.cost)}</span>
               {allStopsRescheduled && (
                 <p className="route-reprogramado-warning">
