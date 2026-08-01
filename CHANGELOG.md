@@ -388,6 +388,7 @@ Cierra el agujero de trazabilidad reportado en `docs/hallazgos-actual.md` tras l
 - `tests/unit/test_optimizers.py`: `test_orchestrator_fallback_returns_valid_solution` anotado con `spec: EC-003` (el test ya existía y ya ejercitaba el fallback; solo le faltaba la anotación).
 - `scripts/check_traceability.py`: implementa la excepción `spec: PENDIENTE` que el propio docstring del script ya prometía pero el código nunca aplicaba — un ID anotado así queda excluido del chequeo de cobertura, en vez de reportarse como faltante.
 - `SPEC.md` §8: RNF-001/002/003 marcados `[DEUDA TÉCNICA]`.
+- `pytest.ini` (nuevo): `pythonpath = .` — `make test-py` invoca `pytest` sin `-m` (a diferencia de `python -m pytest`, usado manualmente durante todo este ciclo), y sin esta configuración `tests/conftest.py` no podía importar `backend_python`, abortando toda la colección de tests antes de correr uno solo. Bug preexistente del `Makefile`, no introducido por este delta; sin `pytest.ini` no había forma de dejar `make verify` en verde de punta a punta.
 
 ### ADR Actualizado
 Nuevo **[ADR-006](docs/adr/ADR-006-deuda-rendimiento-3opt.md)**: declara como deuda técnica el incumplimiento medido de RNF-001/002/003. Medido en esta máquina, con bindings C++ reales y sin ruido de red OSRM: RNF-001 ~50ms (al límite del umbral 10-50ms), RNF-002 ~1,054ms (~2x el umbral de 500ms), RNF-003 ~443s (~90x el umbral de 5s). Causa raíz: el operador 3-opt no tiene límite de tiempo ni escala sus iteraciones frente a `n`, mientras que `max_iters` de Simulated Annealing (`solver_orchestrator.py`) se satura en 1000 para cualquier instancia de 20+ clientes — el costo por movimiento de 3-opt, no el conteo de iteraciones de SA, domina el tiempo total a mayor escala. No se infló el SPEC para que los tests pasaran artificialmente; los umbrales aspiracionales se preservan como objetivo de producto, la brecha queda documentada como deuda con mitigación futura propuesta (`time_limit_ms` en los operadores C++, o paralelización de la búsqueda local).
@@ -395,6 +396,9 @@ Nuevo **[ADR-006](docs/adr/ADR-006-deuda-rendimiento-3opt.md)**: declara como de
 ### Rechazado / Descartado
 - Recalibrar los umbrales de RNF-001/002/003 a los valores medidos actuales — descartado: infla la especificación para ocultar una regresión de rendimiento real en vez de corregirla.
 - Test de rendimiento con assert de umbral real (`elapsed < threshold`) — descartado tras confirmar el incumplimiento: un assert que falla de forma predecible en cada corrida de `verify` no aporta información nueva sobre la deuda ya documentada en el ADR-006; se reemplazó por un assert funcional (el solver resuelve sin fallar a esa escala).
+
+### Estado de `verify` en esta máquina
+`make verify` (build + test + trazabilidad) en verde de punta a punta: `build` compila sin el bloqueo SSL que reportaba `0.6.0` (ya no reproducible); `test-py` 202 passed / 0 failed (con el contenedor `osrm` local levantado — sin él, los 3 tests de `TestOSRMIntegration` se saltan/fallan por falta de servidor, no por regresión); `test-cpp` 1/1 passed; `traceability` 30/30 IDs cubiertos.
 
 ---
 
