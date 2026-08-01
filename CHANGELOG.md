@@ -374,6 +374,30 @@ Ver la entrada correspondiente más abajo en **Rechazado / Descartado** para los
 
 ---
 
+## [0.6.1] — 2026-08-01
+
+### 🔗 Cierre de trazabilidad — RN-003, EC-003, RNF-001/002/003
+
+Cierra el agujero de trazabilidad reportado en `docs/hallazgos-actual.md` tras la adopción de `0.6.0`. Los 30/30 IDs de `SPEC.md` tienen ahora al menos un test anotado; `make traceability` pasa en verde.
+
+### ✨ Added
+- `tests/unit/test_models.py`: 2 tests nuevos para RN-003 (`Flota` heterogénea) — longitud de `capacidades_vehiculos` distinta a `num_vehiculos`, y capacidad individual `<= 0`. La validación ya existía en `Flota.__post_init__`; solo faltaba el test dedicado.
+- `tests/performance/test_rnf_thresholds.py` (nuevo): 3 tests para RNF-001/002/003, `skipif` sin bindings C++ compilados (mismo patrón que OSRM/DB en ADR-005). Confirman que el solver resuelve la instancia sin fallar a cada escala; no assertan los umbrales de tiempo del SPEC como passing/failing.
+
+### 🔀 Changed
+- `tests/unit/test_optimizers.py`: `test_orchestrator_fallback_returns_valid_solution` anotado con `spec: EC-003` (el test ya existía y ya ejercitaba el fallback; solo le faltaba la anotación).
+- `scripts/check_traceability.py`: implementa la excepción `spec: PENDIENTE` que el propio docstring del script ya prometía pero el código nunca aplicaba — un ID anotado así queda excluido del chequeo de cobertura, en vez de reportarse como faltante.
+- `SPEC.md` §8: RNF-001/002/003 marcados `[DEUDA TÉCNICA]`.
+
+### ADR Actualizado
+Nuevo **[ADR-006](docs/adr/ADR-006-deuda-rendimiento-3opt.md)**: declara como deuda técnica el incumplimiento medido de RNF-001/002/003. Medido en esta máquina, con bindings C++ reales y sin ruido de red OSRM: RNF-001 ~50ms (al límite del umbral 10-50ms), RNF-002 ~1,054ms (~2x el umbral de 500ms), RNF-003 ~443s (~90x el umbral de 5s). Causa raíz: el operador 3-opt no tiene límite de tiempo ni escala sus iteraciones frente a `n`, mientras que `max_iters` de Simulated Annealing (`solver_orchestrator.py`) se satura en 1000 para cualquier instancia de 20+ clientes — el costo por movimiento de 3-opt, no el conteo de iteraciones de SA, domina el tiempo total a mayor escala. No se infló el SPEC para que los tests pasaran artificialmente; los umbrales aspiracionales se preservan como objetivo de producto, la brecha queda documentada como deuda con mitigación futura propuesta (`time_limit_ms` en los operadores C++, o paralelización de la búsqueda local).
+
+### Rechazado / Descartado
+- Recalibrar los umbrales de RNF-001/002/003 a los valores medidos actuales — descartado: infla la especificación para ocultar una regresión de rendimiento real en vez de corregirla.
+- Test de rendimiento con assert de umbral real (`elapsed < threshold`) — descartado tras confirmar el incumplimiento: un assert que falla de forma predecible en cada corrida de `verify` no aporta información nueva sobre la deuda ya documentada en el ADR-006; se reemplazó por un assert funcional (el solver resuelve sin fallar a esa escala).
+
+---
+
 ## Rechazado / Descartado
 
 Decisiones evaluadas y descartadas explícitamente para mantener el alcance YAGNI/KISS:

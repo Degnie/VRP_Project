@@ -30,10 +30,21 @@ def extract_annotated_ids() -> set[str]:
     return found
 
 
+def extract_pending_ids() -> set[str]:
+    """IDs anotados explícitamente `spec: PENDIENTE` (cuarentena a propósito)."""
+    found = set()
+    for test_file in (ROOT / "tests").rglob("*.py"):
+        text = test_file.read_text(encoding="utf-8")
+        for match in re.finditer(r"spec:\s*PENDIENTE.*", text):
+            found.update(ID_PATTERN.findall(match.group(0)))
+    return found
+
+
 def main() -> int:
     spec_ids = extract_spec_ids()
     annotated_ids = extract_annotated_ids()
-    missing = sorted(spec_ids - annotated_ids)
+    pending_ids = extract_pending_ids()
+    missing = sorted(spec_ids - annotated_ids - pending_ids)
 
     print(f"IDs en SPEC.md: {len(spec_ids)}")
     print(f"IDs anotados en tests/: {len(annotated_ids)}")

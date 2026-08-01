@@ -41,7 +41,10 @@ class TestSolverPipeline:
     """
 
     def test_orchestrator_fallback_returns_valid_solution(self, medium_instance):
-        """Pipeline fallback (Python) retorna Solucion válida."""
+        """Pipeline fallback (Python) retorna Solucion válida.
+
+        spec: EC-003
+        """
         orchestrator = SolverOrchestrator(medium_instance)
         cost_lookup = orchestrator._build_cost_lookup()
         solution = orchestrator._solve_python_fallback(cost_lookup)

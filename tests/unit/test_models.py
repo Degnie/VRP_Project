@@ -107,6 +107,30 @@ class TestDepositoFlota:
                 capacidad_por_vehiculo=1000
             )
 
+    def test_flota_heterogenea_longitud_debe_coincidir(self):
+        """Invariante RN-003: len(capacidades_vehiculos) == num_vehiculos.
+
+        spec: RN-003
+        """
+        with pytest.raises(ValueError, match="capacidades_vehiculos debe tener"):
+            Flota(
+                num_vehiculos=3,
+                capacidad_por_vehiculo=1000,
+                capacidades_vehiculos=[500, 500],  # ❌ longitud 2 != 3
+            )
+
+    def test_flota_heterogenea_capacidades_deben_ser_positivas(self):
+        """Invariante RN-003: cada capacidad en capacidades_vehiculos > 0.
+
+        spec: RN-003
+        """
+        with pytest.raises(ValueError, match="cada capacidad.*debe ser positiva"):
+            Flota(
+                num_vehiculos=2,
+                capacidad_por_vehiculo=1000,
+                capacidades_vehiculos=[500, 0],  # ❌
+            )
+
 
 class TestInstancia:
     """Agregado: Instancia (depósito + flota + clientes).
