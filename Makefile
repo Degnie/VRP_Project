@@ -1,4 +1,4 @@
-.PHONY: help build test run clean install-deps osrm-prepare db-migrate db-migration
+.PHONY: help build test run clean install-deps osrm-prepare db-migrate db-migration verify traceability mutation
 
 help:
 	@echo "VRP Solver - Build Targets"
@@ -7,6 +7,9 @@ help:
 	@echo "  make test            Run full test suite (Python + C++)"
 	@echo "  make test-py         Run Python tests only"
 	@echo "  make test-cpp        Run C++ tests only"
+	@echo "  make verify          Contrato de verificación completo (build + test + trazabilidad)"
+	@echo "  make traceability    Verifica que cada regla de SPEC.md tenga un test anotado"
+	@echo "  make mutation        Mide el mutation score de mutmut sobre backend_python/models y service"
 	@echo "  make run             Start FastAPI server (http://localhost:8000)"
 	@echo "  make clean           Remove build artifacts"
 	@echo "  make format          Format code (black, clang-format)"
@@ -63,3 +66,14 @@ db-migrate:
 db-migration:
 	alembic revision -m "$(msg)"
 	@echo "✓ New migration created — escribí el DDL a mano en versions/ (sin autogenerate, el proyecto no usa ORM declarativo)"
+
+traceability:
+	python scripts/check_traceability.py
+
+verify: build test traceability
+	@echo "✓ verify: build + test + trazabilidad en verde"
+
+# Umbral fijado en ETAPA 3 tras medir el score base (ADR-005, plan-adopcion.md sección 5)
+mutation:
+	mutmut run --paths-to-mutate backend_python/models,backend_python/service || true
+	mutmut results
