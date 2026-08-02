@@ -402,6 +402,21 @@ Nuevo **[ADR-006](docs/adr/ADR-006-deuda-rendimiento-3opt.md)**: declara como de
 
 ---
 
+## [0.6.2] — 2026-08-01
+
+### 🔍 Ronda 1 de auditoría por roles (Jefe/dueño, Operador/operario, Repartidor)
+
+Ciclo de exploración con un agente por rol de usuario (`agent-workflow/prompts/12-auditoria-roles-claude.md`). Operador y Repartidor: cero hallazgos — ambos flujos ya estaban cubiertos por fixes de rondas anteriores. Jefe (dueño): 2 hallazgos, ambos `[REGLA NUEVA]`, aprobados e implementados en esta misma ronda.
+
+### ✨ Added
+- **RN-COV-002 (Validez de Zona de Cobertura):** `PUT /coverage-zone` exigía cero validación de forma — `CoverageZoneRequest.points` podía guardar un polígono de 0-2 puntos o coordenadas fuera de rango geográfico, a diferencia de `InstanceRequest.coordinates` (RN-012), que sí reutiliza `_validate_lng_lat_pairs`. El único guardarraíl existente era la UI (`RouteMap.tsx`, exige `>= 3` puntos al dibujar) — cualquier llamada directa a la API lo evitaba. Fix: `CoverageZoneRequest` gana su propio `field_validator` que exige mínimo 3 puntos y reutiliza `_validate_lng_lat_pairs` (`backend_python/api/__init__.py`). Tests: `test_put_rejects_fewer_than_3_points`, `test_put_rejects_coordinate_out_of_range` (`tests/unit/test_coverage_zone_api.py`).
+- **RN-EXP-002 (Filtro de Exportación sin Resultado):** `GET /solutions/{id}/export.pdf?vehicle_id=N` con un `vehicle_id` sin ninguna ruta en la solución devolvía `200 OK` con un PDF de 0 páginas de contenido — indistinguible de una descarga exitosa hasta abrir el archivo. Causa: `build_route_pdf` filtra `rutas` por `vehicle_id` sin verificar que el filtro matcheó algo antes de generar el documento. Fix: `export_solution_pdf` valida que exista al menos una ruta con ese `vehicle_id` en la solución antes de generar el PDF; si no, `404` (`backend_python/api/__init__.py`). Test: `test_export_pdf_404_for_vehicle_id_with_no_route` (`tests/integration/test_export_endpoint.py`).
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 205 passed / 0 failed, `test-cpp` 1/1 passed, `traceability` 32/32 IDs cubiertos (subió de 30 con las dos reglas nuevas).
+
+---
+
 ## Rechazado / Descartado
 
 Decisiones evaluadas y descartadas explícitamente para mantener el alcance YAGNI/KISS:
