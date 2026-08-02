@@ -1,4 +1,4 @@
-# ESPECIFICACIÓN VRP SOLVER (v1.0)
+# ESPECIFICACIÓN VRP SOLVER (v1.1)
 
 ## 1. Resumen del Negocio
 El sistema es un solver para el Problema de Ruteamiento de Vehículos (VRP) orientado a producción, capaz de escalar de 50 a 100k+ clientes. Optimiza rutas distribuyendo la demanda de los clientes en una flota de vehículos, minimizando el costo total (distancia) y garantizando que se respeten las restricciones de capacidad. Funciona mediante una arquitectura híbrida donde una API en Python orquesta motores de optimización de alto rendimiento escritos en C++.
