@@ -415,6 +415,10 @@ Ciclo de exploración con un agente por rol de usuario (`agent-workflow/prompts/
 ### Estado de `verify` en esta máquina
 `make verify` en verde: `test-py` 205 passed / 0 failed, `test-cpp` 1/1 passed, `traceability` 32/32 IDs cubiertos (subió de 30 con las dos reglas nuevas).
 
+### 🔍 Ronda 2 de auditoría por roles — cero hallazgos
+
+Los tres roles (Jefe/dueño, Operador/operario, Repartidor) re-verificaron los fixes de RN-COV-002/RN-EXP-002 (siguen andando) y exploraron el resto de su superficie sin encontrar ningún problema nuevo. Primera ronda limpia del ciclo — según la condición de cierre, se necesita una ronda de confirmación también limpia para cerrar el ciclo.
+
 ---
 
 ## Rechazado / Descartado
