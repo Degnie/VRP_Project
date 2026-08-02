@@ -873,6 +873,15 @@ def create_app() -> FastAPI:
         if not solution:
             raise HTTPException(status_code=404, detail="Solución no encontrada")
 
+        # RN-EXP-002: sin este chequeo, un vehicle_id sin ninguna ruta en la
+        # solución (typo, o topología de vehículos cambiada tras re-resolver)
+        # devolvía 200 con un PDF de 0 páginas de contenido — se veía como
+        # una descarga exitosa pero el archivo estaba vacío.
+        if vehicle_id is not None and not any(r.vehicle_id == vehicle_id for r in solution.rutas):
+            raise HTTPException(
+                status_code=404, detail="No hay ruta para el vehículo solicitado en esta solución"
+            )
+
         clientes_by_id = {c.id: c for c in instance.clientes}
         delivery_statuses = pg_adapter.get_client_delivery_statuses(namespaced_id)
         rescheduled_client_ids = {

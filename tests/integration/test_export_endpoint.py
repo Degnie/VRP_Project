@@ -169,6 +169,19 @@ class TestExportEndpoint:
         # debe aparecer en el PDF de la instancia original.
         assert b"Ana Torres" not in response.content
 
+    def test_export_pdf_404_for_vehicle_id_with_no_route(self):
+        """spec: RN-EXP-002"""
+        client = self._client()
+        token = self._register_owner(client, "Export Co No Route")
+        instancia_id = f"export-noroute-{uuid.uuid4().hex[:8]}"
+        assert self._solve_with_contacts(client, token, instancia_id).status_code == 200
+
+        response = client.get(
+            f"/solutions/{instancia_id}/export.pdf?vehicle_id=99",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 404
+
     def test_repartidor_without_assignment_gets_403(self):
         """Bug real: cualquier repartidor con token válido podía pedir el PDF
         de cualquier vehículo (o todos, sin vehicle_id) sin tener ninguna
