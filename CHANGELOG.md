@@ -460,6 +460,31 @@ No se tocaron los operadores de búsqueda local (2-opt, 3-opt, Or-opt, Simulated
 
 ---
 
+## [0.7.1] — 2026-08-02
+
+### 🧹 Resolución del backlog de `docs/PENDIENTES.md`
+
+Cierra las 4 decisiones pendientes y las 2 deudas de suite (`P-03`, `P-04`) registradas en `docs/PENDIENTES.md`.
+
+### 🔀 Changed
+- **RN-013 (nueva, `SPEC.md` §5):** el número de rutas de una solución no puede exceder `num_vehiculos` de la flota, incluso si la demanda agregada es válida (RN-005) — el bin-packing greedy puede fragmentar en más rutas de las disponibles si ningún subconjunto de clientes cabe junto en la capacidad de un vehículo. `tests/unit/test_optimizers.py::TestFleetSizeValidation` (ya existente, sin ID) queda anotado con `spec: RN-013`.
+- `tests/unit/test_optimizers.py::TestOptimizationQuality::test_python_fallback_produces_feasible_solution`: anotado `spec: RN-011, RN-005, RN-010` (cobertura única, capacidad respetada, costo total consistente) — el test ya ejercitaba las tres reglas, solo le faltaba la anotación.
+- `tests/unit/test_optimizers.py::TestSolverPipeline`, `tests/unit/test_api_integration.py::TestAPIFactory`, `tests/unit/test_osrm_client.py`: `spec: PENDIENTE` reemplazado por una nota explícita de cuarentena técnica permanente (instanciación de FastAPI, cliente HTTP OSRM, logging del pipeline) — no mapean a ninguna regla de dominio, conforme a `TESTING_STRATEGY.md` §4.
+
+### 🗑️ Removed
+- `core_cpp/include/solution.hpp`: `Solution::is_valid()` — stub (`// TODO: implement validation`, siempre `true`) que aparentaba validar invariantes sin hacerlo. La validación real ya vive en Python (`Solucion.__post_init__`, con mensajes en español ya cuidados). Sin callers en Python (`grep` confirmó cero usos). Binding pybind11 correspondiente eliminado en `core_cpp/src/bindings.cpp`.
+- `tests/conftest.py`: fixtures `small_instance`/`medium_instance`/`large_instance` — placeholders huérfanos del árbol académico Qt/C++ (firma de modelo incompatible con el dominio actual, dos de los tres eran literalmente `return None`). Ningún test real las usaba: `test_optimizers.py` define su propio fixture local `medium_instance`, que pytest resuelve en su lugar (prioridad de fixture local sobre `conftest.py`). El fixture `_run_migrations` (real, usado por `test_migrations.py`) se preserva sin cambios.
+
+### Decisiones de producto (sin cambio de código)
+- **Política DRL para optimización (ADR-0003):** se mantienen las heurísticas deterministas (`_compute_sa_params`). Sin evidencia de que la calidad de solución actual sea un problema — invertir en DRL (dataset, infraestructura de entrenamiento, PyTorch en runtime) es especulativo sin necesidad concreta reportada.
+- **Cobertura geográfica OSRM:** se mantiene solo Perú — el negocio apunta a mercados locales. Ampliar a otro país es mecánico (`make osrm-prepare` con otro extracto de Geofabrik), disponible cuando haya demanda real.
+- **Reintentos de conexión a BD:** ítem retirado de "Decisiones pendientes" por obsoleto — ya resuelto en `0.3.6` (`CONNECT_RETRIES` en ambos adapters). Referenciaba `PHASE_3_FINAL_STATUS.md`, documento de una fase temprana nunca resincronizado.
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 205 passed / 0 failed en 98s, `test-cpp` 1/1 passed, `traceability` 33/33 IDs cubiertos (subió de 32 con RN-013).
+
+---
+
 ## Rechazado / Descartado
 
 Decisiones evaluadas y descartadas explícitamente para mantener el alcance YAGNI/KISS:
