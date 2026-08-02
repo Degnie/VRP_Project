@@ -10,6 +10,8 @@ ver TESTING_STRATEGY.md §4.
 """
 
 import os
+from unittest.mock import patch, MagicMock
+
 import pytest
 from backend_python.service.osrm_client import get_osrm_matrix, OSRMError
 
@@ -39,6 +41,36 @@ def test_osrm_matrix_rejects_non_geographic_coordinates():
             max_table_size=100,
             timeout_seconds=1,
         )
+
+
+def test_osrm_matrix_rejects_null_distance_cell():
+    """Bug real: OSRM devuelve null en una celda de distances cuando no hay
+    ruta vial entre dos coordenadas (islas, tramos desconectados, cobertura
+    incompleta del extracto) — sin este chequeo, None llega hasta
+    np.asarray(dtype=float64) y se convierte en NaN silencioso, que RN-008
+    (costo >= 0) nunca detecta porque NaN < 0 es False en IEEE 754. El caller
+    (SolverOrchestrator) espera OSRMError para activar el fallback euclidiano
+    (RN-MAT-001) — sin esto, /solve respondía 200 con total_cost: NaN.
+
+    spec: RN-MAT-001
+    """
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "code": "Ok",
+        "distances": [[0.0, None], [None, 0.0]],
+        "sources": [{"distance": 0.0}, {"distance": 0.0}],
+        "destinations": [{"distance": 0.0}, {"distance": 0.0}],
+    }
+    mock_response.raise_for_status.return_value = None
+
+    with patch("requests.get", return_value=mock_response):
+        with pytest.raises(OSRMError, match="null distance"):
+            get_osrm_matrix(
+                [(-77.03, -12.05), (-77.02, -12.04)],
+                base_url="http://localhost:59999",
+                max_table_size=100,
+                timeout_seconds=1,
+            )
 
 
 @pytest.mark.skipif(not OSRM_AVAILABLE, reason="OSRM not configured")

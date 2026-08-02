@@ -74,6 +74,18 @@ def _table_request(coords: List[Tuple[float, float]], base_url: str, timeout_sec
     if distances is None:
         raise OSRMError("OSRM response missing 'distances' (check annotations=distance)")
 
+    # Bug real (Ronda 5, ciclo nuevo, dueño): OSRM devuelve null en una celda
+    # cuando no hay ruta vial entre dos coordenadas (islas, tramos
+    # desconectados, cobertura incompleta del extracto) — sin este chequeo,
+    # None llega hasta np.asarray(dtype=float64) y se convierte en NaN
+    # silencioso. NaN < 0 es False en IEEE 754, así que RN-008 (costo >= 0)
+    # nunca lo detecta: la solución responde 200 con total_cost: NaN.
+    if any(cell is None for row in distances for cell in row):
+        raise OSRMError(
+            "OSRM returned null distance for at least one coordinate pair — "
+            "no road route found (island, disconnected segment, or incomplete map coverage)"
+        )
+
     _validate_snap_distances(data.get("sources") or [])
     _validate_snap_distances(data.get("destinations") or [])
 

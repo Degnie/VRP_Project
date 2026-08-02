@@ -55,6 +55,24 @@ Dueño y repartidor rompieron su racha de rondas limpias con hallazgos nuevos y 
 
 ---
 
+## [0.7.5] — 2026-08-02
+
+### 🔍 Ronda 5 (última) de auditoría por roles — ciclo cerrado por tope
+
+Última ronda del ciclo (tope de 5 declarado en el PASO 0). Operario y repartidor cerraron limpios (9 y 6 rondas consecutivas respectivamente), pero dueño encontró 1 hallazgo `[BUG]` nuevo — el ciclo cierra **por tope**, no por rondas limpias: dueño no llegó a acumular las 2 rondas limpias consecutivas que exige esa condición de cierre.
+
+### 🐛 Fixed
+- **OSRM `null` distances → `NaN` silencioso, no detectado por RN-008/RN-010:** OSRM devuelve `null` en una celda de `distances` cuando no hay ruta vial entre dos coordenadas (islas, tramos desconectados, cobertura incompleta del extracto de Perú) — sin validación, ese `None` llegaba hasta `np.asarray(dtype=float64)` y se convertía en `NaN` silencioso, sin lanzar `OSRMError` ni activar el fallback euclidiano de RN-MAT-001. `NaN < 0` es `False` en IEEE 754, así que ni RN-008 (costo de ruta `>= 0`) ni RN-010 (costo total = suma de costos) lo detectaban — `/solve` respondía `200 OK` con `total_cost: NaN`. Fix: `_table_request` (`backend_python/service/osrm_client.py`) valida que ninguna celda de `distances` sea `None` antes de devolver la matriz, lanzando `OSRMError` — el caller (`SolverOrchestrator`) ya captura ese error y cae al fallback euclidiano sin cambios adicionales. Test: `test_osrm_matrix_rejects_null_distance_cell` (`tests/unit/test_osrm_client.py`).
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 215 passed / 0 failed (214 previos + 1 nuevo), `test-cpp` 1/1 passed, `traceability` 35/35 IDs cubiertos (sin cambio, el hallazgo cita RN-MAT-001 ya existente).
+
+### 📋 Resumen del ciclo de auditoría por roles (Rondas 1-5, 2026-08-02)
+
+5 rondas, cierre por tope (dueño no encadenó 2 rondas limpias). Total: 8 hallazgos `[BUG]`/`[REGLA NUEVA]` corregidos a lo largo del ciclo — RN-005/RN-006 en edición de cliente, 3 casos de fuga cruzada entre repartidores (`get_solution`, `list_instances` x2 variantes, agregados de flota), RN-014 (consistencia coordinates/demands), RN-015 (timestamps con zona horaria), y OSRM null-distance → NaN silencioso. Cero hallazgos descartados; cero refinamientos excesivos bloqueados por el cortacircuito de área.
+
+---
+
 ## ⬆️ MIGRACIÓN: Academia → Producción (2026-07-23 en adelante)
 
 **Este punto marca la transición arquitectónica de la solución académica Qt/C++ al SaaS híbrido Python/C++.**
