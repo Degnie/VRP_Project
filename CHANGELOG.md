@@ -23,6 +23,20 @@ Ciclo de exploración con un agente por rol de usuario (`agent-workflow/prompts/
 
 ---
 
+## [0.7.3] — 2026-08-02
+
+### 🔍 Ronda 3 (confirmación) de auditoría por roles
+
+La Ronda 2 (0.7.2) cerró limpia en los tres roles — primera ronda limpia del ciclo. Esta ronda de confirmación: dueño y operario cerraron limpios de nuevo, pero repartidor encontró 1 hallazgo `[BUG]` nuevo, así que el ciclo sigue (no cumple la condición de 2 rondas limpias consecutivas).
+
+### 🐛 Fixed
+- **Agregados de flota completa expuestos a repartidor en `GET /instances`:** `num_clients`/`num_vehicles` en el resumen de instancia eran los de la operación COMPLETA (todos los vehículos/repartidores), no los de la ruta propia del repartidor — a diferencia de `capacity`, que sí venía correctamente acotada por vehículo desde `flota_config.capacities[]`. Un repartidor veía, por ejemplo, "4 clientes, 2 vehículos" cuando a él solo le tocaban 2 clientes en su propio vehículo. Mismo patrón de fuga cruzada ya corregido 5 veces en rondas anteriores (`get_my_route`, `update_delivery_status`, `export_solution_pdf`, `get_delivery_statuses`, y en la Ronda 1 de este ciclo `get_solution`/`list_instances` sin filtro), pero en un campo que ninguna ronda anterior había inspeccionado (contaban filas visibles, no el contenido agregado dentro de cada fila). Fix: `list_instance_summaries` (`backend_python/persistence/postgres_adapter.py`) expone `ra.vehicle_id` para las filas de repartidor; el endpoint (`backend_python/api/__init__.py`) lee la ruta específica en Mongo (acotado a las filas ya filtradas a ese repartidor, sin reintroducir el N+1 de toda la cuenta que este query evita a propósito) para recalcular `num_clients`/`num_vehicles=1`. Test: `test_list_instances_repartidor_sees_own_route_counts_not_full_fleet` (`tests/integration/test_order_lifecycle.py`).
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 211 passed / 0 failed (210 previos + 1 nuevo), `test-cpp` 1/1 passed, `traceability` 33/33 IDs cubiertos (sin cambio, sin ID nuevo).
+
+---
+
 ## ⬆️ MIGRACIÓN: Academia → Producción (2026-07-23 en adelante)
 
 **Este punto marca la transición arquitectónica de la solución académica Qt/C++ al SaaS híbrido Python/C++.**

@@ -396,15 +396,23 @@ class PostgreSQLAdapter:
         cursor = self.conn.cursor()
         try:
             if repartidor_user_id is not None:
+                # Bug real (Ronda 3, ciclo nuevo, repartidor): num_clients/
+                # num_vehicles/capacity eran los de la flota/operación COMPLETA
+                # (todos los repartidores), no los de la ruta propia — un
+                # repartidor veía "50 clientes, 6 vehículos" cuando a él le
+                # tocaban 8. ra.vehicle_id se expone para que el caller (API)
+                # pueda leer la ruta específica en Mongo y acotar esos campos
+                # sin reintroducir el N+1 que este query ya evita (Mongo se
+                # consulta solo para las filas ya acotadas a este repartidor).
                 cursor.execute(
                     """
-                    SELECT i.id, COUNT(DISTINCT c.id), f.num_vehicles, f.capacity, i.created_at
+                    SELECT i.id, COUNT(DISTINCT c.id), f.num_vehicles, f.capacity, i.created_at, ra.vehicle_id, f.capacities
                     FROM instancias i
                     JOIN route_assignments ra ON ra.instancia_id = i.id AND ra.repartidor_user_id = %s
                     JOIN flota_config f ON f.instancia_id = i.id
                     LEFT JOIN clientes c ON c.instancia_id = i.id
                     WHERE i.account_id = %s
-                    GROUP BY i.id, f.num_vehicles, f.capacity, i.created_at
+                    GROUP BY i.id, f.num_vehicles, f.capacity, i.created_at, ra.vehicle_id, f.capacities
                     ORDER BY i.created_at DESC
                     """,
                     [repartidor_user_id, account_id],
@@ -422,16 +430,24 @@ class PostgreSQLAdapter:
                     """,
                     [account_id],
                 )
-            return [
-                {
+            rows_out = []
+            for row in cursor.fetchall():
+                capacity = row[3]
+                vehicle_id = None
+                if repartidor_user_id is not None:
+                    vehicle_id = row[5]
+                    capacities = row[6]
+                    if capacities and 0 <= vehicle_id < len(capacities):
+                        capacity = capacities[vehicle_id]
+                rows_out.append({
                     "id": row[0],
                     "num_clients": row[1],
                     "num_vehicles": row[2],
-                    "capacity": row[3],
+                    "capacity": capacity,
                     "created_at": row[4].isoformat() if row[4] else None,
-                }
-                for row in cursor.fetchall()
-            ]
+                    "vehicle_id": vehicle_id,
+                })
+            return rows_out
         except psycopg2.Error:
             return []
         finally:

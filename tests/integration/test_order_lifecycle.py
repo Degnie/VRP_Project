@@ -1596,6 +1596,45 @@ class TestOrderLifecycle:
         assert assigned_id in ids
         assert unassigned_id not in ids
 
+    def test_list_instances_repartidor_sees_own_route_counts_not_full_fleet(self):
+        """Bug real (Ronda 3, ciclo nuevo, repartidor): num_clients/
+        num_vehicles/capacity en GET /instances eran los de la operación
+        COMPLETA (todos los repartidores), no los de la ruta propia — un
+        repartidor veía "4 clientes, 2 vehículos" cuando a él solo le tocaban
+        2 clientes en su propio vehículo."""
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle SummaryScope")
+        repartidor_token, repartidor_id = self._register_repartidor(client, owner_token)
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+
+        solve_res = client.post(
+            "/solve",
+            json={
+                "instancia_id": instancia_id,
+                "coordinates": [(10, 10), (20, 20), (30, 30), (40, 40)],
+                "demands": [60, 60, 60, 60],
+                "num_vehicles": 2,
+                "vehicle_capacity": 130,
+                "depot_coordinates": (0, 0),
+            },
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        assert solve_res.status_code == 200
+        self._assign(client, owner_token, instancia_id, {"0": repartidor_id})
+
+        my_route = client.get(
+            f"/instances/{instancia_id}/my-route",
+            headers={"Authorization": f"Bearer {repartidor_token}"},
+        ).json()
+        expected_num_clients = len(my_route["stops"])
+        assert expected_num_clients < 4, "el test necesita que la ruta propia no cubra los 4 clientes"
+
+        response = client.get("/instances", headers={"Authorization": f"Bearer {repartidor_token}"})
+        assert response.status_code == 200
+        summary = next(s for s in response.json() if s["id"] == instancia_id)
+        assert summary["num_clients"] == expected_num_clients
+        assert summary["num_vehicles"] == 1
+
     def test_assigned_only_ignored_for_owner(self):
         """assigned_only solo aplica a repartidor — dueño sigue viendo todo."""
         client = self._client()

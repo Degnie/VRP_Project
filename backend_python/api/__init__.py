@@ -784,16 +784,41 @@ def create_app() -> FastAPI:
             rows = pg_adapter.list_instance_summaries(
                 current_user.account_id, repartidor_user_id=repartidor_user_id
             )
-            return [
-                InstanceSummary(
+
+            summaries = []
+            for row in rows:
+                num_clients = row["num_clients"]
+                num_vehicles = row["num_vehicles"]
+
+                # Bug real (Ronda 3, ciclo nuevo, repartidor): num_clients/
+                # num_vehicles venían de la operación COMPLETA (todos los
+                # repartidores), no de la ruta propia — capacity ya viene
+                # acotada al vehículo propio desde Postgres (flota_config.
+                # capacities[vehicle_id]); num_clients requiere la secuencia
+                # real de la ruta, que solo vive en la solución (Mongo). Se
+                # consulta solo para las filas ya filtradas a este repartidor
+                # (no reintroduce el N+1 de toda la cuenta que este endpoint
+                # evita a propósito).
+                if repartidor_user_id is not None and mongo_adapter:
+                    # row["id"] ya viene namespaced desde Postgres (mismo id
+                    # que persiste save_instance) — no volver a namespacear.
+                    solution = mongo_adapter.load_solution(row["id"])
+                    ruta = next(
+                        (r for r in solution.rutas if r.vehicle_id == row["vehicle_id"]),
+                        None,
+                    ) if solution else None
+                    if ruta:
+                        num_clients = len(ruta.secuencia)
+                        num_vehicles = 1
+
+                summaries.append(InstanceSummary(
                     id=_strip_namespace(current_user.account_id, row["id"]),
-                    num_clients=row["num_clients"],
-                    num_vehicles=row["num_vehicles"],
+                    num_clients=num_clients,
+                    num_vehicles=num_vehicles,
                     capacity=row["capacity"],
                     created_at=row["created_at"],
-                )
-                for row in rows
-            ]
+                ))
+            return summaries
 
         except Exception as e:
             logger.error(f"List instances error: {e}")
