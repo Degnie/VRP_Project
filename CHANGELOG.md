@@ -73,6 +73,22 @@ Dueño y repartidor rompieron su racha de rondas limpias con hallazgos nuevos y 
 
 ---
 
+## [0.7.6] — 2026-08-02
+
+### 🔍 Ronda 1 de auditoría por roles (ciclo nuevo, post cierre por tope de 5cc9b2e)
+
+3 hallazgos `[BUG]`, uno por rol — el ciclo anterior cerró por tope sin rondas limpias, y esta primera ronda confirma que aún había superficie real por descubrir.
+
+### 🐛 Fixed
+- **`PostgreSQLAdapter` no se reconectaba tras perder una conexión ya establecida:** `CONNECT_RETRIES` en `__init__` solo cubría la conexión inicial — si Postgres se reiniciaba (mantenimiento, actualización de imagen Docker) mientras el proceso de la API seguía vivo, `self.conn` quedaba con un objeto cerrado y **todas** las acciones del dueño/operario que tocan Postgres fallaban con 500 permanentemente, hasta reiniciar el proceso a mano — aunque Postgres ya se hubiera recuperado solo segundos después. Fix: `_locked` (decorador que ya envuelve los 27 métodos del adapter) chequea `self.conn.closed` antes de cada operación y reconecta vía el nuevo método `_reconnect()` (misma lógica de reintentos que `__init__`, ahora factorizada) — cubre todos los métodos de una sola vez sin tocarlos uno por uno. Test: `test_reconnects_when_connection_was_closed` (`tests/unit/test_persistence.py`).
+- **`reschedule_instance` sin guard en el `save_instance` final:** el flujo de reprogramación hace 3 escrituras secuenciales a Postgres; el paso 2 (`mark_clients_rescheduled`) ya tenía guard de limpieza ante fallo (Ronda 3 de un ciclo anterior), pero el paso 3 (`save_instance` con los clientes reales) no tenía ninguno — si Postgres fallaba ahí, los clientes ya estaban marcados `'reprogramado'` (commit irreversible) apuntando a una instancia nueva que nunca llegó a tener sus datos reales: huérfanos para siempre, sin aparecer como pendientes en ningún lado. Fix: un reintento inline (mismo espíritu que `CONNECT_RETRIES`, cubre el caso más común de blip transitorio) y, si vuelve a fallar, `503` explícito indicando que los pedidos ya se movieron, en vez de un `500` genérico. Tests: `test_reschedule_recovers_if_final_save_fails_once_transiently`, `test_reschedule_returns_503_if_final_save_fails_persistently` (`tests/integration/test_order_lifecycle.py`).
+- **`RepartidorView.tsx`: estado "Guardando…"/"✓ Guardado" cruzado entre instancias:** `savingStopIds`/`savedStopIds` no se reseteaban al cambiar de instancia (a diferencia de `route`/`pendingChange`/`error`, que sí lo hacían en el mismo efecto) — un `client_id` de la instancia anterior podía mostrar el indicador de guardado en una instancia distinta sin que el repartidor hubiera tocado nada ahí (RN-004 solo garantiza unicidad de id dentro de una instancia, no entre instancias). Fix: ambos `Set` se resetean en el mismo efecto `[selectedId]` que ya limpia el resto del estado. **Sin test automatizado** — el proyecto no tiene un runner de tests de frontend conectado a `make verify` (Playwright está instalado como dependencia pero sin script `npm test`, y los `.spec.ts` de `frontend/e2e/` no corren en este ciclo); documentado explícitamente como deuda de cobertura de frontend, no como bug sin verificar.
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 218 passed / 0 failed (217 previos + 1 nuevo), `test-cpp` 1/1 passed, `traceability` 35/35 IDs cubiertos (sin cambio, los 3 hallazgos citan reglas ya existentes o son fixes de infraestructura sin ID de dominio).
+
+---
+
 ## ⬆️ MIGRACIÓN: Academia → Producción (2026-07-23 en adelante)
 
 **Este punto marca la transición arquitectónica de la solución académica Qt/C++ al SaaS híbrido Python/C++.**

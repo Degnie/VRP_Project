@@ -55,6 +55,30 @@ class TestPostgreSQLAdapter:
         finally:
             adapter.close()
 
+    def test_reconnects_when_connection_was_closed(self):
+        """Bug real (Ronda 1, ciclo nuevo, dueño): CONNECT_RETRIES en
+        __init__ solo cubría la conexión inicial — si Postgres se reiniciaba
+        (mantenimiento, actualización de imagen Docker) mientras el proceso
+        de la API seguía vivo, self.conn quedaba con un objeto cerrado y
+        CADA acción posterior fallaba con 500, aunque Postgres ya se hubiera
+        recuperado, hasta reiniciar el proceso a mano."""
+        from backend_python.persistence.postgres_adapter import PostgreSQLAdapter
+
+        adapter = PostgreSQLAdapter()
+        try:
+            adapter.conn.close()
+            assert adapter.conn.closed
+
+            depot = Deposito(Coordinate(0.0, 0.0), "Test Depot")
+            flota = Flota(num_vehiculos=1, capacidad_por_vehiculo=100)
+            clientes = [Cliente(1, Coordinate(10.0, 10.0), 50)]
+            instance = Instancia(id="test_pg_reconnect", deposito=depot, flota=flota, clientes=clientes)
+
+            assert adapter.save_instance(instance) is True
+            assert not adapter.conn.closed
+        finally:
+            adapter.close()
+
     def test_list_instances(self):
         """List all instances from PostgreSQL."""
         from backend_python.persistence.postgres_adapter import PostgreSQLAdapter

@@ -52,6 +52,20 @@ def _locked(method):
     @functools.wraps(method)
     def wrapper(self, *args, **kwargs):
         with self._lock:
+            # Bug real (Ronda 1, ciclo nuevo, dueño): CONNECT_RETRIES en
+            # __init__ solo cubre la conexión inicial — si Postgres se
+            # reinicia (mantenimiento, actualización de imagen Docker)
+            # mientras el proceso de la API sigue vivo, self.conn queda con
+            # un objeto roto (no None) y CADA acción del dueño/operario que
+            # toca Postgres falla con 500 hasta reiniciar el proceso a mano,
+            # aunque Postgres ya se haya recuperado solo. self.conn.closed
+            # es 0 mientras la conexión sigue viva del lado del cliente —
+            # psycopg2 no lo actualiza proactivamente ante un corte remoto,
+            # así que este chequeo detecta el caso más común (el propio
+            # proceso ya cerró la conexión tras un error previo) sin
+            # pretender detectar cualquier corte de red instantáneamente.
+            if self.conn is not None and self.conn.closed:
+                self._reconnect()
             return method(self, *args, **kwargs)
     return wrapper
 
@@ -81,19 +95,24 @@ class PostgreSQLAdapter:
         self._lock = threading.Lock()
 
         if HAS_PSYCOPG2:
-            last_error = None
-            for attempt in range(1, CONNECT_RETRIES + 1):
-                try:
-                    self.conn = psycopg2.connect(connection_string, connect_timeout=5)
-                    return
-                except psycopg2.Error as e:
-                    last_error = e
-                    logger.warning(
-                        f"PostgreSQL connection attempt {attempt}/{CONNECT_RETRIES} failed: {e}"
-                    )
-                    if attempt < CONNECT_RETRIES:
-                        time.sleep(CONNECT_RETRY_DELAY_SECONDS)
-            raise ConnectionError(f"PostgreSQL connection failed after {CONNECT_RETRIES} attempts: {last_error}")
+            self._reconnect()
+
+    def _reconnect(self) -> None:
+        """(Re)establece self.conn con reintentos — usado en __init__ y por
+        @_locked cuando detecta que la conexión ya establecida se cerró."""
+        last_error = None
+        for attempt in range(1, CONNECT_RETRIES + 1):
+            try:
+                self.conn = psycopg2.connect(self.connection_string, connect_timeout=5)
+                return
+            except psycopg2.Error as e:
+                last_error = e
+                logger.warning(
+                    f"PostgreSQL connection attempt {attempt}/{CONNECT_RETRIES} failed: {e}"
+                )
+                if attempt < CONNECT_RETRIES:
+                    time.sleep(CONNECT_RETRY_DELAY_SECONDS)
+        raise ConnectionError(f"PostgreSQL connection failed after {CONNECT_RETRIES} attempts: {last_error}")
 
     @_locked
     def save_instance(self, instance: Instancia, account_id: Optional[str] = None) -> bool:

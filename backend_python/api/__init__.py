@@ -1385,7 +1385,32 @@ def create_app() -> FastAPI:
         new_instance = Instancia(
             id=new_namespaced_id, deposito=instance.deposito, flota=instance.flota, clientes=new_clientes,
         )
-        pg_adapter.save_instance(new_instance, account_id=current_user.account_id)
+        # Bug real (Ronda 1, ciclo nuevo, operario): si save_instance fallaba
+        # acá (Postgres caído/timeout), la excepción se propagaba sin
+        # capturar — pero para este punto mark_clients_rescheduled YA hizo
+        # commit (los clientes ya están 'reprogramado' apuntando a
+        # new_namespaced_id, sin forma de deshacerlo). A diferencia del guard
+        # del paso anterior (que cancela limpiamente porque nada más se
+        # comprometió todavía), acá no hay ningún endpoint que reconstruya
+        # new_instance desde cero (sus clientes ya no son "pendientes" de la
+        # instancia vieja) — un solo reintento inline cubre el caso más
+        # común (timeout/blip puntual, mismo espíritu que CONNECT_RETRIES en
+        # la conexión inicial); si vuelve a fallar, se informa con 503 en vez
+        # de un 500 genérico, dejando claro que los pedidos SÍ se movieron
+        # aunque la instancia nueva haya quedado sin guardar.
+        try:
+            pg_adapter.save_instance(new_instance, account_id=current_user.account_id)
+        except psycopg2.Error:
+            try:
+                pg_adapter.save_instance(new_instance, account_id=current_user.account_id)
+            except psycopg2.Error:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        f"Los pedidos ya se movieron a la instancia {new_visible_id}, pero no se "
+                        "pudo guardar su contenido por una falla de base de datos — reintentá en unos segundos"
+                    ),
+                )
 
         return RescheduleResponse(new_instancia_id=new_visible_id, rescheduled_client_ids=moved_ids)
 

@@ -1498,6 +1498,69 @@ class TestOrderLifecycle:
         assert retry.status_code == 200
         assert retry.json()["rescheduled_client_ids"] == [1, 2]
 
+    def test_reschedule_recovers_if_final_save_fails_once_transiently(self):
+        """Bug real (Ronda 1, ciclo nuevo, operario): el save_instance FINAL
+        (con los clientes reales, después de que mark_clients_rescheduled ya
+        hizo commit) no tenía ningún reintento ni guard — un solo blip
+        transitorio de Postgres (timeout puntual) tumbaba el request entero
+        con los clientes ya marcados 'reprogramado' e irreversibles, sin
+        ningún intento de recuperación pese a que save_instance es
+        idempotente."""
+        from unittest.mock import patch
+        from backend_python.persistence.postgres_adapter import psycopg2, PostgreSQLAdapter
+
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle Reschedule FinalSaveFlaky")
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_token, instancia_id)
+
+        original_save_instance = PostgreSQLAdapter.save_instance
+        call_count = {"n": 0}
+
+        def flaky_save_instance(self, instance, account_id=None):
+            call_count["n"] += 1
+            if call_count["n"] == 2:  # 1ra llamada = placeholder, debe seguir funcionando
+                raise psycopg2.Error("simulated transient connection loss")
+            return original_save_instance(self, instance, account_id=account_id)
+
+        with patch.object(PostgreSQLAdapter, "save_instance", flaky_save_instance):
+            response = client.post(
+                f"/instances/{instancia_id}/reschedule",
+                headers={"Authorization": f"Bearer {owner_token}"},
+            )
+        assert response.status_code == 200
+        assert response.json()["rescheduled_client_ids"] == [1, 2]
+
+    def test_reschedule_returns_503_if_final_save_fails_persistently(self):
+        """Mismo escenario que arriba, pero la falla NO es transitoria (las
+        dos llamadas a save_instance fallan) — los clientes ya quedaron
+        'reprogramado' de forma irreversible (mark_clients_rescheduled ya
+        commiteó), así que el único remedio honesto es informarlo con 503 en
+        vez de un 500 genérico, dejando claro que los pedidos SÍ se movieron."""
+        from unittest.mock import patch
+        from backend_python.persistence.postgres_adapter import psycopg2, PostgreSQLAdapter
+
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle Reschedule FinalSaveDown")
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_token, instancia_id)
+
+        original_save_instance = PostgreSQLAdapter.save_instance
+        call_count = {"n": 0}
+
+        def flaky_save_instance(self, instance, account_id=None):
+            call_count["n"] += 1
+            if call_count["n"] >= 2:  # 1ra llamada = placeholder, debe seguir funcionando
+                raise psycopg2.Error("simulated persistent connection loss")
+            return original_save_instance(self, instance, account_id=account_id)
+
+        with patch.object(PostgreSQLAdapter, "save_instance", flaky_save_instance):
+            response = client.post(
+                f"/instances/{instancia_id}/reschedule",
+                headers={"Authorization": f"Bearer {owner_token}"},
+            )
+        assert response.status_code == 503
+
     def test_reschedule_concurrent_requests_never_duplicate_clients(self):
         """Bug real: dos reprogramaciones REALMENTE concurrentes (no
         secuenciales) sobre la misma instancia podían ambas leer el mismo set

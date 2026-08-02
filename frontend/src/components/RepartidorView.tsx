@@ -167,6 +167,14 @@ export function RepartidorView({ onLogout: onLogoutProp }: Props) {
   }, [selectedId]);
 
   useEffect(() => {
+    // Bug real (Ronda 1, ciclo nuevo, repartidor): a diferencia de route/
+    // pendingChange/error, estos dos Sets no se reseteaban al cambiar de
+    // instancia — un client_id de la instancia anterior mostraba "Guardando…"
+    // /"✓ Guardado" en la instancia nueva sin que el repartidor hubiera
+    // tocado nada ahí (RN-004 solo garantiza ids únicos DENTRO de una
+    // instancia, no entre instancias distintas).
+    setSavingStopIds(new Set());
+    setSavedStopIds(new Set());
     if (!selectedId) {
       setRoute(null);
       // Sin ninguna instancia seleccionada no hay ninguna ruta contra la
