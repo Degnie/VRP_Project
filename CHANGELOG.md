@@ -425,6 +425,41 @@ Segunda ronda limpia consecutiva: los tres roles exploraron ángulos nuevos no c
 
 ---
 
+## [0.7.0] — 2026-08-02
+
+### 🚀 P-01/P-02 — Fix real de rendimiento del pipeline C++ (RNF-001/002/003)
+
+Cierra la deuda técnica del ADR-006. El diagnóstico original de ese ADR (operador 3-opt sin límite de tiempo/escala) era **incorrecto** — un perfilado con timing real por etapa (instancia de 5,000 clientes, bindings C++ reales) lo descartó: 3-opt y SimulatedAnnealing juntos representaban menos del 2% del tiempo total. El cuello de botella real era la construcción de `CostMatrix` celda por celda desde Python (`_solve_cpp_pipeline`), cruzando la frontera pybind11 N² veces — 98.4% del tiempo total (~84s de ~85s medidos en 5,000 clientes).
+
+### ✨ Added
+- `core_cpp/include/cost_matrix.hpp`: `CostMatrix::set_costs_bulk(const double* flat, size_t flat_size)` — llena la matriz completa en una sola pasada C++ desde un buffer plano row-major, en vez de `N²` llamadas a `set_cost`.
+- `core_cpp/src/bindings.cpp`: expone `set_costs_bulk` recibiendo un `numpy.ndarray` 2D contiguo (`py::array_t<double, py::array::c_style | py::array::forcecast>`) — una sola travesía de la frontera pybind11.
+- `core_cpp/tests/test_cost_matrix.cpp`: 3 tests nuevos (`SetCostsBulkMatchesCellByCell`, `SetCostsBulkRejectsWrongSize`, `SetCostsBulkRejectsNegative`).
+- `backend_python/service/solver_orchestrator.py`: `_build_cost_matrix_array()` — construye la matriz de costos como array NumPy denso (vectorizado con NumPy en el caso euclídeo, `np.asarray` directo en el caso OSRM), fuente única para `_build_cost_lookup` (dict, fallback Python) y `_solve_cpp_pipeline` (array, pipeline C++). Elimina el dict intermedio de 25M+ entradas que antes se reconstruía para instancias grandes.
+
+### 🔀 Changed
+- `SPEC.md` §8: RNF-001/002/003 ya no llevan `[DEUDA TÉCNICA]` — los tres umbrales se cumplen.
+- `tests/performance/test_rnf_thresholds.py`: los 3 tests recuperan su assert real de umbral de tiempo, anotados `spec: RNF-001/002/003` (ya no `spec: PENDIENTE`).
+- `docs/adr/ADR-006-deuda-rendimiento-3opt.md`: estado `Resuelto`, diagnóstico corregido con datos de perfilado, y la solución real documentada.
+
+### Medido en esta máquina (bindings C++ reales, sin ruido de red OSRM)
+
+| RNF | Escala | Umbral SPEC | Antes | Después |
+|---|---|---|---|---|
+| RNF-001 | 50 clientes | 10-50ms | ~50ms (al límite) | **~29ms** |
+| RNF-002 | 500 clientes | 100-500ms | ~1,054ms (~2x el umbral) | **~78ms** |
+| RNF-003 | 5,000 clientes | 1-5s | ~443s (~90x el umbral) | **~2.2s** |
+
+No se tocaron los operadores de búsqueda local (2-opt, 3-opt, Or-opt, SimulatedAnnealing) — el perfilado confirmó que nunca fueron la causa del problema de rendimiento.
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 205 passed / 0 failed en 103s (antes ~900s, dominado por el test RNF-003 lento), `test-cpp` 1/1 passed, `traceability` 32/32 IDs cubiertos.
+
+### Rechazado / Descartado
+- Límites de tiempo (`time_limit_ms`) en los operadores C++ de búsqueda local, como proponía la primera versión del ADR-006 — descartado tras el perfilado real: esos operadores nunca fueron el cuello de botella, así que ese fix no habría movido el tiempo medido.
+
+---
+
 ## Rechazado / Descartado
 
 Decisiones evaluadas y descartadas explícitamente para mantener el alcance YAGNI/KISS:

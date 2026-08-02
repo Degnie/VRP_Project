@@ -66,9 +66,9 @@ El sistema es un solver para el Problema de Ruteamiento de Vehículos (VRP) orie
 * **EC-003 (Falla del Core C++):** Si el módulo compilado de C++ no está accesible en el sistema anfitrión, el orquestador aplica un "fallback" transparente a implementaciones matemáticas equivalentes en Python para resolver la instancia (aunque con mayor tiempo de cómputo).
 
 ## 8. Requisitos No Funcionales (RNF)
-* **RNF-001 [DEUDA TÉCNICA]:** Resoluciones para instancias Pequeñas (< 100 nodos) en 10-50ms (CPU).
-* **RNF-002 [DEUDA TÉCNICA]:** Resoluciones para instancias Medianas (100 - 1,000 nodos) en 100-500ms (CPU).
-* **RNF-003 [DEUDA TÉCNICA]:** Resoluciones para instancias Grandes (1,000 - 10,000 nodos) en 1-5 segundos (requiere CPU moderno + 8GB RAM). Ver [ADR-006](docs/adr/ADR-006-deuda-rendimiento-3opt.md): medido en ~90x el umbral para instancias de 5,000 nodos, causa raíz en el operador 3-opt sin límite de tiempo/escala.
+* **RNF-001:** Resoluciones para instancias Pequeñas (< 100 nodos) en 10-50ms (CPU).
+* **RNF-002:** Resoluciones para instancias Medianas (100 - 1,000 nodos) en 100-500ms (CPU).
+* **RNF-003:** Resoluciones para instancias Grandes (1,000 - 10,000 nodos) en 1-5 segundos (requiere CPU moderno + 8GB RAM).
 
 ## 9. Fuera de Alcance
 * **Distancias sobre alternativas a OSRM:** Valhalla queda como alternativa conceptual de ruteo, pero no está implementada ni forma parte del scope actual.

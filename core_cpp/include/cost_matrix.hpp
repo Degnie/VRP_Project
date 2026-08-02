@@ -37,6 +37,25 @@ public:
         costs[from][to] = cost;
     }
 
+    // Llena la matriz completa de una sola vez desde un buffer plano
+    // row-major (tamaño n_nodes*n_nodes) — evita el overhead de cruzar la
+    // frontera pybind11 una vez por celda (N² llamadas) cuando el caller ya
+    // tiene todos los costos calculados de antemano (ver ADR-006).
+    void set_costs_bulk(const double* flat, size_t flat_size) {
+        if (flat_size != n_nodes * n_nodes) {
+            throw std::invalid_argument("set_costs_bulk: tamaño de buffer no coincide con n_nodes*n_nodes");
+        }
+        for (size_t i = 0; i < n_nodes; ++i) {
+            for (size_t j = 0; j < n_nodes; ++j) {
+                double cost = flat[i * n_nodes + j];
+                if (cost < 0 && cost != std::numeric_limits<double>::infinity()) {
+                    throw std::invalid_argument("Negative costs not allowed");
+                }
+                costs[i][j] = cost;
+            }
+        }
+    }
+
     size_t size() const { return n_nodes; }
 
     bool is_valid() const {

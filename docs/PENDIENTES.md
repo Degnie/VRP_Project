@@ -5,8 +5,6 @@
 ## Lote en curso
 | ID | Ítem | Clase | Procedencia | Curadurías sobrevividas |
 |---|---|---|---|---|
-| P-01 | Degradación inaceptable del operador 3-opt en instancias masivas (Falla RNF-001, RNF-002, RNF-003) | `[BUG]` | `ADR-006` y `TESTING_STRATEGY.md` | 1 |
-| P-02 | Tests funcionales de RNF en cuarentena (habilitar tras corregir P-01) | `[DEUDA DE SUITE]` | `tests/performance/test_rnf_thresholds.py` | 1 |
 
 ## Backlog ordenado
 | ID | Ítem | Clase | Procedencia | Curadurías sobrevividas |
@@ -25,3 +23,5 @@
 ## Cerrados
 | Ítem | Motivo del cierre | Fecha |
 |---|---|---|
+| P-01 — Degradación del operador 3-opt en instancias masivas | Diagnóstico original incorrecto (no era 3-opt); perfilado real identificó la causa en la construcción de `CostMatrix` celda por celda vía pybind11 (98.4% del tiempo). Resuelto con `CostMatrix::set_costs_bulk` + `_build_cost_matrix_array` (array NumPy denso, sin dict intermedio). RNF-001/002/003 cumplen umbral tras el fix (~29ms, ~78ms, ~2.2s). Ver ADR-006. | 2026-08-02 |
+| P-02 — Tests funcionales de RNF en cuarentena | `tests/performance/test_rnf_thresholds.py` recuperó sus asserts reales de umbral tras P-01; ya no `spec: PENDIENTE`. | 2026-08-02 |

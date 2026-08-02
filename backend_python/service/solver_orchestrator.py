@@ -8,10 +8,11 @@ import logging
 import sys
 import os
 
+import numpy as np
+
 # Import del modelo de dominio
 from backend_python.models import (
-    Coordinate, Cliente, Deposito, Flota, Instancia,
-    Ruta, Solucion, distancia_euclidiana
+    Cliente, Deposito, Flota, Instancia, Ruta, Solucion
 )
 from backend_python.config import get_config
 from backend_python.service.osrm_client import get_osrm_matrix, OSRMError
@@ -54,18 +55,26 @@ class SolverOrchestrator:
         3. Simulated Annealing (optimización)
         4. 3-opt Polish (refinamiento)
 
-        La matriz de costos se construye una sola vez, antes de decidir
-        el camino de resolución (fallback Python o pipeline C++), para que
-        ambos caminos usen exactamente la misma fuente de distancias.
+        La matriz de costos se construye una sola vez (como array denso),
+        antes de decidir el camino de resolución (fallback Python o pipeline
+        C++), para que ambos caminos usen exactamente la misma fuente de
+        distancias. El fallback Python necesita un dict indexado por id real
+        (deriva del mismo array, sin recalcular OSRM/euclídea); el pipeline
+        C++ usa el array directo (ver ADR-006).
 
         Retorna: Solucion válida y optimizada
         """
-        cost_lookup = self._build_cost_lookup()
+        node_ids, cost_array = self._build_cost_matrix_array()
 
         if not HAS_CPP_BINDINGS:
+            cost_lookup = {
+                (node_ids[i], node_ids[j]): float(cost_array[i, j])
+                for i in range(len(node_ids))
+                for j in range(len(node_ids))
+            }
             solution = self._solve_python_fallback(cost_lookup)
         else:
-            solution = self._solve_cpp_pipeline(cost_lookup)
+            solution = self._solve_cpp_pipeline(cost_array)
 
         if len(solution.rutas) > self.instance.flota.num_vehiculos:
             raise ValueError(
@@ -93,11 +102,31 @@ class SolverOrchestrator:
         """
         Construye la matriz de costos como dict {(from_id, to_id): distancia}.
 
+        Usado por el fallback Python (_solve_python_fallback), que indexa por
+        id real de cliente. El pipeline C++ usa _build_cost_matrix_array en
+        su lugar (mismo cálculo, sin pasar por dict) — ver ADR-006.
+        """
+        node_ids, matrix = self._build_cost_matrix_array()
+        return {
+            (node_ids[i], node_ids[j]): float(matrix[i, j])
+            for i in range(len(node_ids))
+            for j in range(len(node_ids))
+        }
+
+    def _build_cost_matrix_array(self) -> Tuple[List[int], "np.ndarray"]:
+        """
+        Construye la matriz de costos como array NumPy 2D denso, indexado por
+        posición (mismo orden que node_ids: 0 = depósito, luego clientes en
+        orden de instance.clientes).
+
         Intenta OSRM primero (distancias reales sobre calles); si falla o no
         está configurado, cae silenciosamente a distancia euclídea — nunca
         bloquea la resolución de la instancia.
 
-        IDs: 0 = depósito, 1..N = clientes (mismo esquema que el pipeline C++).
+        ADR-006: fuente única para _build_cost_lookup (dict, fallback Python)
+        y _solve_cpp_pipeline (array, pipeline C++) — evita reconstruir la
+        matriz dos veces o pasar por un dict intermedio de 25M+ entradas en
+        instancias grandes.
         """
         node_ids = [0] + [c.id for c in self.instance.clientes]
         coords = [
@@ -114,23 +143,19 @@ class SolverOrchestrator:
                     timeout_seconds=config.OSRM_TIMEOUT_SECONDS,
                 )
                 self.log.append("Cost matrix: OSRM (calles reales)")
-                return {
-                    (node_ids[i], node_ids[j]): matrix[i][j]
-                    for i in range(len(node_ids))
-                    for j in range(len(node_ids))
-                }
+                return node_ids, np.asarray(matrix, dtype=np.float64)
             except OSRMError as e:
                 logger.warning(f"OSRM unavailable, falling back to euclidean distance: {e}")
                 self.log.append("Cost matrix: euclidiana (OSRM no disponible)")
         else:
             self.log.append("Cost matrix: euclidiana (OSRM_URL no configurado)")
 
-        all_coords = [Coordinate(x, y) for x, y in coords]
-        return {
-            (node_ids[i], node_ids[j]): distancia_euclidiana(all_coords[i], all_coords[j])
-            for i in range(len(node_ids))
-            for j in range(len(node_ids))
-        }
+        xs = np.array([c[0] for c in coords], dtype=np.float64)
+        ys = np.array([c[1] for c in coords], dtype=np.float64)
+        dx = xs[:, None] - xs[None, :]
+        dy = ys[:, None] - ys[None, :]
+        matrix = np.sqrt(dx * dx + dy * dy)
+        return node_ids, matrix
 
     def _solve_python_fallback(self, cost_lookup: Dict[Tuple[int, int], float]) -> Solucion:
         """
@@ -201,12 +226,12 @@ class SolverOrchestrator:
 
         return Ruta(vehicle_id=vehicle_id, secuencia=[], costo=0.0)
 
-    def _solve_cpp_pipeline(self, cost_lookup: Dict[Tuple[int, int], float]) -> Solucion:
+    def _solve_cpp_pipeline(self, cost_array: "np.ndarray") -> Solucion:
         """
         Resolver vía C++ bindings con pipeline completo: NN → SA → 3-opt.
 
         Pasos:
-        1. Build Graph + CostMatrix (C++), llenada con cost_lookup (OSRM o euclídea)
+        1. Build Graph + CostMatrix (C++), llenada con cost_array (OSRM o euclídea)
         2. Nearest Neighbor (construcción)
         3. Simulated Annealing (optimización con SA)
         4. 3-opt Polish (refinamiento)
@@ -236,15 +261,20 @@ class SolverOrchestrator:
             graph.add_node(real_to_node[client.id], client.coordenada.x,
                           client.coordenada.y, int(client.demanda))
 
-        # 2. Build cost matrix from cost_lookup (OSRM o euclídea, ya resuelto en solve())
-        # cost_lookup sigue indexado por id REAL (así lo arma _build_cost_lookup),
-        # pero la matriz C++ se llena por índice de nodo contiguo.
-        real_node_ids = [0] + [c.id for c in self.instance.clientes]
+        # 2. Build cost matrix desde cost_array (OSRM o euclídea, ya resuelto
+        # en solve() vía _build_cost_matrix_array) — mismo orden [depósito,
+        # clientes...] que real_to_node, así que ya está indexado por índice
+        # de nodo contiguo, sin conversión adicional.
+        #
+        # ADR-006: llenar celda por celda vía N² llamadas a set_cost cruzaba
+        # la frontera pybind11 esa misma cantidad de veces — 98.4% del tiempo
+        # total del pipeline en una instancia de 5,000 clientes (~84s de
+        # ~85s medidos), sin que 3-opt ni SimulatedAnnealing fueran la causa.
+        # set_costs_bulk recibe la matriz completa como un solo array NumPy
+        # (una sola travesía de la frontera); cost_array ya viene armado como
+        # array denso desde _build_cost_matrix_array, sin dict intermedio.
         cost_matrix = vrp_solver.CostMatrix(n_nodes)
-        for i, from_real_id in enumerate(real_node_ids):
-            for j, to_real_id in enumerate(real_node_ids):
-                if i != j:
-                    cost_matrix.set_cost(i, j, cost_lookup[(from_real_id, to_real_id)])
+        cost_matrix.set_costs_bulk(cost_array)
 
         # 3. Nearest Neighbor (construcción inicial)
         self.log.append("Step 1: Nearest Neighbor construction")

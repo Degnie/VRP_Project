@@ -6,6 +6,7 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/numpy.h>
 #include "../include/graph.hpp"
 #include "../include/cost_matrix.hpp"
 #include "../include/solution.hpp"
@@ -45,7 +46,16 @@ PYBIND11_MODULE(vrp_solver, m) {
         .def("set_cost", &CostMatrix::set_cost)
         .def("size", &CostMatrix::size)
         .def("is_valid", &CostMatrix::is_valid)
-        .def_static("from_euclidean", &CostMatrix::from_euclidean);
+        .def_static("from_euclidean", &CostMatrix::from_euclidean)
+        // Carga bulk desde un numpy.ndarray 2D (n,n) contiguo — evita cruzar
+        // la frontera pybind11 una vez por celda (ver ADR-006).
+        .def("set_costs_bulk", [](CostMatrix& self, py::array_t<double, py::array::c_style | py::array::forcecast> arr) {
+            auto buf = arr.request();
+            if (buf.ndim != 2 || static_cast<size_t>(buf.shape[0]) != self.size() || static_cast<size_t>(buf.shape[1]) != self.size()) {
+                throw std::invalid_argument("set_costs_bulk: se espera un array 2D de forma (n_nodes, n_nodes)");
+            }
+            self.set_costs_bulk(static_cast<const double*>(buf.ptr), buf.shape[0] * buf.shape[1]);
+        });
 
     // Solution bindings
     py::class_<Route>(m, "Route")
