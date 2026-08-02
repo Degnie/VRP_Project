@@ -24,7 +24,9 @@ def _auth_headers(client):
 class TestAPIFactory:
     """Tests para validar que la API se crea correctamente.
 
-    spec: PENDIENTE
+    Técnico (instanciación de FastAPI, rutas registradas, /health responde),
+    sin mapear a ninguna regla de dominio — cuarentena permanente, ver
+    TESTING_STRATEGY.md §4.
     """
 
     def test_api_app_creation(self):

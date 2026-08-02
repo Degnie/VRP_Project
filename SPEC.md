@@ -43,6 +43,7 @@ El sistema es un solver para el Problema de Ruteamiento de Vehículos (VRP) orie
 * **RN-010 (Solución - Costo Total):** El costo total de la solución debe ser exactamente igual a la sumatoria matemática del costo de todas las rutas individuales.
 * **RN-011 (Solución - Cobertura Única):** Cada cliente que existe en la instancia debe ser visitado exactamente una vez en toda la solución.
 * **RN-012 (API - Coordenadas):** Las coordenadas recibidas en los endpoints deben representar tuplas lógicas de tamaño 2 y con valores reales (longitud/latitud válidos).
+* **RN-013 (Solución - Rutas no exceden flota):** El número de rutas de una solución no puede exceder `num_vehiculos` de la flota, incluso si la demanda agregada es válida (RN-005) — el algoritmo de construcción puede fragmentar en más rutas de las disponibles si ningún subconjunto de clientes cabe junto en la capacidad de un solo vehículo. Al violarse, el sistema rechaza con error explícito antes de retornar una solución.
 * **RN-AUTH-001 (Autenticación):** Toda llamada a los endpoints protegidos requiere un token JWT válido.
 * **RN-CAT-001 (Catálogo Aislado):** El catálogo de vehículos está estrictamente aislado por cuenta de cliente (Account).
 * **RN-CAT-002 (Validación Catálogo):** La creación de un tipo de vehículo en el catálogo requiere pesos y volúmenes estrictamente mayores a cero.

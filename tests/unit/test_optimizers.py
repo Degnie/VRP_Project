@@ -37,7 +37,10 @@ def medium_instance():
 class TestSolverPipeline:
     """Tests para pipeline completo: NN → SA → 3-opt.
 
-    spec: PENDIENTE
+    test_pipeline_logs_progression es técnico (verifica que orchestrator.log
+    sea una lista, sin mapear a ninguna regla de dominio) — cuarentena
+    permanente, ver TESTING_STRATEGY.md §4. test_orchestrator_fallback_*
+    ya cita su propio ID (EC-003) en el método.
     """
 
     def test_orchestrator_fallback_returns_valid_solution(self, medium_instance):
@@ -115,7 +118,7 @@ class TestCostMatrixFallback:
 class TestFleetSizeValidation:
     """Tests para validar que la solución no exceda num_vehiculos disponibles.
 
-    spec: PENDIENTE
+    spec: RN-013
     """
 
     def test_solve_rejects_solution_needing_more_vehicles_than_fleet(self):
@@ -141,13 +144,15 @@ class TestFleetSizeValidation:
 
 
 class TestOptimizationQuality:
-    """Tests para validar mejora de calidad.
-
-    spec: PENDIENTE
-    """
+    """Tests para validar mejora de calidad."""
 
     def test_python_fallback_produces_feasible_solution(self, medium_instance):
-        """Pipeline Python fallback siempre produce solución factible."""
+        """Pipeline Python fallback siempre produce solución factible: cobertura
+        única (RN-011), capacidad respetada (RN-005), costo total consistente
+        (RN-010).
+
+        spec: RN-011, RN-005, RN-010
+        """
         orchestrator = SolverOrchestrator(medium_instance)
         cost_lookup = orchestrator._build_cost_lookup()
         solution = orchestrator._solve_python_fallback(cost_lookup)

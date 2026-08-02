@@ -3,7 +3,10 @@ Tests para el cliente OSRM: matriz simple, chunking, y propagación de errores.
 Se activan solo si OSRM_URL está configurado y el servicio responde (mismo
 patrón skipif que test_persistence.py para Postgres/Mongo).
 
-spec: PENDIENTE
+Técnico (infraestructura del cliente HTTP hacia OSRM), sin mapear a una
+regla de dominio — el fallback OSRM→euclídea (RN-MAT-001) ya está cubierto
+aparte en test_optimizers.py::TestCostMatrixFallback. Cuarentena permanente,
+ver TESTING_STRATEGY.md §4.
 """
 
 import os
