@@ -1,8 +1,8 @@
 <hallazgos_auditoria>
-  <contexto> Lote activo proveniente de la curaduría de docs/PENDIENTES.md (P-01 y P-02). El objetivo es saldar la deuda de rendimiento del motor C++ y reactivar sus tests funcionales de RNF que actualmente están en cuarentena. </contexto>
+  <contexto> Lote final proveniente de docs/PENDIENTES.md (P-03 y P-04). El objetivo es saldar la última deuda de suite, mapeando tests técnicos pendientes y generando los fixtures faltantes para dejar el backlog de deuda a cero. </contexto>
   <bugs> 
-  - [BUG] (P-01) Degradación inaceptable del operador 3-opt en instancias masivas. Falla los umbrales de RNF-001, RNF-002, RNF-003. (Documentado en ADR-006 y TESTING_STRATEGY.md). Requiere corregir el cuello de botella en C++.
-  - [DEUDA DE SUITE] (P-02) Tests funcionales de RNF en cuarentena. Requiere quitar el marcador `spec: PENDIENTE` de `tests/performance/test_rnf_thresholds.py` y lograr que pasen en verde tras corregir P-01.
+  - [DEUDA DE SUITE] (P-03) Tests técnicos y de integración pendientes de mapeo o en cuarentena. Revisar `tests/unit/test_persistence.py`, `test_api_integration.py`, `test_optimizers.py`, etc., mapearlos a reglas de SPEC si corresponde, o dejarlos sin cuarentena.
+  - [DEUDA DE SUITE] (P-04) Fixtures faltantes para instancias medianas/masivas. Generar los fixtures descritos en `tests/conftest.py` líneas 54 y 60.
   </bugs>
   <reglas_propuestas> </reglas_propuestas>
   <descartados> </descartados>

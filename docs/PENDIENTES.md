@@ -1,16 +1,16 @@
 # Pendientes
 
-Última curaduría: 2026-08-02 · Curadurías realizadas: 2
+Última curaduría: 2026-08-02 · Curadurías realizadas: 3
 
 ## Lote en curso
 | ID | Ítem | Clase | Procedencia | Curadurías sobrevividas |
 |---|---|---|---|---|
+| P-03 | Tests técnicos y de integración pendientes de mapeo o en cuarentena | `[DEUDA DE SUITE]` | `tests/unit/test_persistence.py`, `test_api_integration.py`, etc | 2 |
+| P-04 | Fixtures faltantes para instancias medianas/masivas | `[DEUDA DE SUITE]` | `tests/conftest.py:54,60` | 2 |
 
 ## Backlog ordenado
 | ID | Ítem | Clase | Procedencia | Curadurías sobrevividas |
 |---|---|---|---|---|
-| P-03 | Tests técnicos y de integración pendientes de mapeo o en cuarentena | `[DEUDA DE SUITE]` | `tests/unit/test_persistence.py`, `test_api_integration.py`, etc | 1 |
-| P-04 | Fixtures faltantes para instancias medianas/masivas | `[DEUDA DE SUITE]` | `tests/conftest.py:54,60` | 1 |
 
 ## Decisiones pendientes de tomar
 | Ítem | Opciones | Procedencia |
