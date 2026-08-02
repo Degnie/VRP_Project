@@ -53,6 +53,29 @@ class TestVehicleCatalogAPI:
         assert len(listed.json()) == 1
         assert listed.json()[0]["name"] == "Moto"
 
+    def test_list_vehicle_catalog_respects_limit_and_offset(self):
+        """Bug real (Ronda 2, ciclo nuevo, dueño): GET /vehicle-catalog no
+        aceptaba limit/offset — una cuenta con un catálogo grande no tenía
+        forma de acotar la respuesta."""
+        client = self._client()
+        token, _ = self._register_owner(client, "Flota Paginada")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        for name in ["Moto", "Camioneta", "Camión"]:
+            client.post("/vehicle-catalog", json={
+                "name": name, "weight_capacity_kg": 30, "volume_capacity_m3": 0.15, "tolerance_margin": 0.9,
+            }, headers=headers)
+
+        page1 = client.get("/vehicle-catalog", params={"limit": 2}, headers=headers)
+        assert page1.status_code == 200
+        assert len(page1.json()) == 2
+
+        page2 = client.get("/vehicle-catalog", params={"limit": 2, "offset": 2}, headers=headers)
+        assert page2.status_code == 200
+        assert len(page2.json()) == 1
+
+        assert client.get("/vehicle-catalog", params={"limit": 0}, headers=headers).status_code == 422
+
     def test_create_respects_client_provided_id(self):
         """Bug real: el backend siempre generaba su propio id (uuid4),
         ignorando cualquier id enviado por el cliente. El frontend arma la

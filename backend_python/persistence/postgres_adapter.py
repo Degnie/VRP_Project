@@ -187,6 +187,18 @@ class PostgreSQLAdapter:
             # guardaba una instancia grande. executemany de psycopg
             # pipelinea los statements en un solo roundtrip de red.
             if instance.clientes:
+                # Bug real (Ronda 2, ciclo nuevo, operario): este upsert
+                # sobreescribía incondicionalmente demand/x/y/contacto con el
+                # snapshot que la instancia tenía al EMPEZAR el solve — un
+                # PATCH /clients/{id} (update_client) de otro operario que
+                # commiteaba mientras el pipeline NN->SA->3-opt seguía
+                # corriendo (puede tardar segundos) se perdía en silencio,
+                # ambos requests devolviendo 200. El WHERE de la cláusula DO
+                # UPDATE solo pisa la fila si su updated_at en DB sigue
+                # coincidiendo con el snapshot que trajo load_instance() —
+                # si cambió (edición concurrente), la fila existente gana y
+                # el cliente en memoria queda con datos ahora obsoletos, pero
+                # eso es preferible a perder la edición sin ningún aviso.
                 cursor.executemany(
                     sql.SQL("""
                         INSERT INTO clientes (id, instancia_id, demand, x, y, customer_name, customer_phone, address)
@@ -197,7 +209,9 @@ class PostgreSQLAdapter:
                             y = EXCLUDED.y,
                             customer_name = EXCLUDED.customer_name,
                             customer_phone = EXCLUDED.customer_phone,
-                            address = EXCLUDED.address
+                            address = EXCLUDED.address,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE clientes.updated_at IS NOT DISTINCT FROM %s
                     """),
                     [
                         (
@@ -209,6 +223,7 @@ class PostgreSQLAdapter:
                             client.customer_name,
                             client.customer_phone,
                             client.address,
+                            client.updated_at,
                         )
                         for client in instance.clientes
                     ],
@@ -274,7 +289,7 @@ class PostgreSQLAdapter:
 
             # Load clientes
             cursor.execute(
-                "SELECT id, demand, x, y, customer_name, customer_phone, address "
+                "SELECT id, demand, x, y, customer_name, customer_phone, address, updated_at "
                 "FROM clientes WHERE instancia_id = %s",
                 [instance_id]
             )
@@ -291,6 +306,7 @@ class PostgreSQLAdapter:
                 Cliente(
                     int(row[0]), Coordinate(row[2], row[3]), float(row[1]),
                     customer_name=row[4], customer_phone=row[5], address=row[6],
+                    updated_at=row[7].isoformat() if row[7] else None,
                 )
                 for row in clientes_rows
             ]
@@ -365,10 +381,14 @@ class PostgreSQLAdapter:
             # cliente como reprogramado, perdiendo la corrección en silencio
             # (ambos requests devolvían 200). Igual que update_client_delivery_status,
             # el guard va en el propio WHERE para que sea atómico con el UPDATE.
+            # updated_at=CURRENT_TIMESTAMP (Ronda 2, ciclo nuevo, operario):
+            # marca esta edición como más reciente que cualquier snapshot que
+            # un solve concurrente haya cargado antes — save_instance la
+            # respeta en vez de pisarla con el upsert al terminar el pipeline.
             cursor.execute(
                 """
                 UPDATE clientes SET x=%s, y=%s, demand=%s,
-                    customer_name=%s, customer_phone=%s, address=%s
+                    customer_name=%s, customer_phone=%s, address=%s, updated_at=CURRENT_TIMESTAMP
                 WHERE id=%s AND instancia_id=%s AND delivery_status != 'reprogramado'
                 """,
                 [x, y, demand, customer_name, customer_phone, address, client_id, instance_id],
@@ -405,12 +425,18 @@ class PostgreSQLAdapter:
 
     @_locked
     def list_instance_summaries(
-        self, account_id: str, repartidor_user_id: Optional[str] = None
+        self, account_id: str, repartidor_user_id: Optional[str] = None,
+        limit: Optional[int] = None, offset: int = 0,
     ) -> List[dict]:
         """Resumen (id, num_clients, num_vehicles, capacity, created_at) de cada
         instancia de la cuenta en un solo query agregado — evita el N+1 de
         llamar load_instance() (que trae clientes completos) por cada fila
         solo para exponer un conteo en GET /instances.
+
+        limit/offset opcionales (Ronda 2, ciclo nuevo, dueño): sin límite
+        declarado en SPEC.md, ninguna cuenta con muchas instancias históricas
+        tenía forma de acotar este listado — sin limit, el comportamiento es
+        idéntico al de siempre (trae todo).
 
         Si repartidor_user_id se pasa, filtra a solo las instancias con una
         ruta asignada a ese repartidor (mismo alcance que
@@ -439,8 +465,9 @@ class PostgreSQLAdapter:
                     WHERE i.account_id = %s
                     GROUP BY i.id, f.num_vehicles, f.capacity, i.created_at, ra.vehicle_id, f.capacities
                     ORDER BY i.created_at DESC
+                    LIMIT %s OFFSET %s
                     """,
-                    [repartidor_user_id, account_id],
+                    [repartidor_user_id, account_id, limit, offset],
                 )
             else:
                 cursor.execute(
@@ -452,8 +479,9 @@ class PostgreSQLAdapter:
                     WHERE i.account_id = %s
                     GROUP BY i.id, f.num_vehicles, f.capacity, i.created_at
                     ORDER BY i.created_at DESC
+                    LIMIT %s OFFSET %s
                     """,
-                    [account_id],
+                    [account_id, limit, offset],
                 )
             rows_out = []
             for row in cursor.fetchall():
@@ -495,6 +523,44 @@ class PostgreSQLAdapter:
             cursor.execute(
                 sql.SQL("INSERT INTO accounts (id, name) VALUES (%s, %s)"),
                 [account_id, name],
+            )
+            self.conn.commit()
+            return True
+        except psycopg2.Error:
+            self.conn.rollback()
+            raise
+        finally:
+            cursor.close()
+
+    @_locked
+    def create_account_with_user(
+        self, account_id: str, account_name: str,
+        user_id: str, email: str, password_hash: str, role: str, full_name: Optional[str] = None,
+    ) -> bool:
+        """Crea la cuenta y su primer usuario en una sola transacción.
+
+        Bug real (Ronda 2, ciclo nuevo, dueño): /auth/register llamaba
+        create_account() y create_user() como dos escrituras independientes,
+        cada una con su propio commit — si la segunda fallaba por cualquier
+        motivo que no fuera el email duplicado ya capturado (Postgres caído,
+        timeout entre ambas), la cuenta quedaba huérfana sin usuario, sin
+        ningún endpoint ni proceso para detectarla o recuperarla. Un solo
+        cursor + un solo commit/rollback hace que ambos INSERT sean atómicos.
+        """
+        if self.conn is None:
+            return False
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                sql.SQL("INSERT INTO accounts (id, name) VALUES (%s, %s)"),
+                [account_id, account_name],
+            )
+            cursor.execute(
+                sql.SQL("""
+                    INSERT INTO users (id, account_id, email, password_hash, role, full_name)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """),
+                [user_id, account_id, email, password_hash, role, full_name],
             )
             self.conn.commit()
             return True
@@ -577,15 +643,17 @@ class PostgreSQLAdapter:
             cursor.close()
 
     @_locked
-    def list_users_by_account(self, account_id: str) -> List[dict]:
+    def list_users_by_account(
+        self, account_id: str, limit: Optional[int] = None, offset: int = 0
+    ) -> List[dict]:
         if self.conn is None:
             return []
         cursor = self.conn.cursor()
         try:
             cursor.execute(
                 "SELECT id, email, role, full_name, active FROM users "
-                "WHERE account_id = %s ORDER BY created_at",
-                [account_id],
+                "WHERE account_id = %s ORDER BY created_at LIMIT %s OFFSET %s",
+                [account_id, limit, offset],
             )
             return [
                 {"id": row[0], "email": row[1], "role": row[2], "full_name": row[3], "active": row[4]}
@@ -643,15 +711,17 @@ class PostgreSQLAdapter:
             cursor.close()
 
     @_locked
-    def list_vehicle_types(self, account_id: str) -> List[dict]:
+    def list_vehicle_types(
+        self, account_id: str, limit: Optional[int] = None, offset: int = 0
+    ) -> List[dict]:
         if self.conn is None:
             return []
         cursor = self.conn.cursor()
         try:
             cursor.execute(
                 "SELECT id, name, weight_capacity_kg, volume_capacity_m3, tolerance_margin "
-                "FROM vehicle_catalog WHERE account_id = %s ORDER BY created_at",
-                [account_id],
+                "FROM vehicle_catalog WHERE account_id = %s ORDER BY created_at LIMIT %s OFFSET %s",
+                [account_id, limit, offset],
             )
             return [
                 {

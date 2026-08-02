@@ -356,10 +356,9 @@ def create_app() -> FastAPI:
         account_id = str(uuid.uuid4())
         user_id = str(uuid.uuid4())
         try:
-            pg_adapter.create_account(account_id, request.account_name)
-            pg_adapter.create_user(
-                user_id, account_id, request.email,
-                hash_password(request.password), "dueño", request.full_name,
+            pg_adapter.create_account_with_user(
+                account_id, request.account_name,
+                user_id, request.email, hash_password(request.password), "dueño", request.full_name,
             )
         except psycopg2.errors.UniqueViolation:
             # El chequeo de arriba (get_user_by_email) no cierra la ventana
@@ -440,11 +439,21 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/auth/users", response_model=List[TeamMemberOut])
-    def list_team(current_user: CurrentUser = Depends(require_role("dueño", "operario"))):
-        """Equipo (usuarios) de la cuenta del usuario autenticado."""
+    def list_team(
+        limit: Optional[int] = None,
+        offset: int = 0,
+        current_user: CurrentUser = Depends(require_role("dueño", "operario")),
+    ):
+        """Equipo (usuarios) de la cuenta del usuario autenticado.
+
+        limit/offset opcionales (Ronda 2, ciclo nuevo, dueño) — sin limit,
+        comportamiento idéntico al de siempre (trae todo).
+        """
         if not pg_adapter:
             raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
-        users = pg_adapter.list_users_by_account(current_user.account_id)
+        if limit is not None and limit <= 0:
+            raise HTTPException(status_code=422, detail="limit debe ser mayor a 0")
+        users = pg_adapter.list_users_by_account(current_user.account_id, limit=limit, offset=offset)
         return [TeamMemberOut(**u) for u in users]
 
     @app.patch("/auth/users/{user_id}", response_model=TeamMemberOut)
@@ -474,11 +483,21 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/vehicle-catalog", response_model=List[VehicleTypeOut])
-    def list_vehicle_catalog(current_user: CurrentUser = Depends(get_current_user)):
-        """Catálogo de vehículos de la cuenta del usuario autenticado."""
+    def list_vehicle_catalog(
+        limit: Optional[int] = None,
+        offset: int = 0,
+        current_user: CurrentUser = Depends(get_current_user),
+    ):
+        """Catálogo de vehículos de la cuenta del usuario autenticado.
+
+        limit/offset opcionales (Ronda 2, ciclo nuevo, dueño) — sin limit,
+        comportamiento idéntico al de siempre (trae todo).
+        """
         if not pg_adapter:
             raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
-        types = pg_adapter.list_vehicle_types(current_user.account_id)
+        if limit is not None and limit <= 0:
+            raise HTTPException(status_code=422, detail="limit debe ser mayor a 0")
+        types = pg_adapter.list_vehicle_types(current_user.account_id, limit=limit, offset=offset)
         return [VehicleTypeOut(**t) for t in types]
 
     @app.post("/vehicle-catalog", response_model=VehicleTypeOut, status_code=201)
@@ -769,6 +788,8 @@ def create_app() -> FastAPI:
     @app.get("/instances", response_model=List[InstanceSummary])
     def list_instances(
         assigned_only: bool = False,
+        limit: Optional[int] = None,
+        offset: int = 0,
         current_user: CurrentUser = Depends(get_current_user),
     ):
         """Lista instancias de la cuenta del usuario.
@@ -778,9 +799,18 @@ def create_app() -> FastAPI:
         de instancias ajenas en su selector. `assigned_only` queda aceptado
         por compatibilidad con el frontend, que ya lo manda; no cambia el
         resultado (el enforcement ya no depende de que el caller lo pase).
+
+        `limit`/`offset` opcionales (Ronda 2, ciclo nuevo, dueño): sin
+        `limit`, el comportamiento es igual al de siempre (trae todo) — el
+        objetivo declarado del proyecto ("escalar de 50 a 100k+ clientes")
+        no tenía forma de acotar el listado de instancias históricas de una
+        cuenta que crece con el tiempo, a diferencia de otros listados que sí
+        tienen un límite natural (clientes por instancia).
         """
         if not pg_adapter:
             raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
+        if limit is not None and limit <= 0:
+            raise HTTPException(status_code=422, detail="limit debe ser mayor a 0")
 
         try:
             # Bug real (Ronda 1, ciclo nuevo, repartidor): el filtro a "solo
@@ -792,7 +822,8 @@ def create_app() -> FastAPI:
                 current_user.user_id if current_user.role == "repartidor" else None
             )
             rows = pg_adapter.list_instance_summaries(
-                current_user.account_id, repartidor_user_id=repartidor_user_id
+                current_user.account_id, repartidor_user_id=repartidor_user_id,
+                limit=limit, offset=offset,
             )
 
             summaries = []

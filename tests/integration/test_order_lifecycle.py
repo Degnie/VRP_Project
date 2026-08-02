@@ -1156,6 +1156,60 @@ class TestOrderLifecycle:
         edited_client = next(c for c in new_instance.clientes if c.id == 1)
         assert edited_client.address == "Dirección corregida en la carrera"
 
+    def test_solve_does_not_overwrite_concurrent_client_edit(self):
+        """Bug real (Ronda 2, ciclo nuevo, operario): _solve_and_persist lee
+        la instancia en T0, corre el pipeline (puede tardar segundos), y al
+        terminar hace un upsert incondicional del snapshot T0 — un PATCH
+        /clients/{id} (update_client) de otro operario que commiteaba
+        MIENTRAS el pipeline seguía corriendo se perdía en silencio, ambos
+        requests devolviendo 200. Se simula la carrera editando el cliente
+        DESDE DENTRO del mock del pipeline (solve_instance), en el punto
+        exacto donde correría si las requests estuvieran intercaladas."""
+        from unittest.mock import patch
+        import backend_python.api as api_module
+
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle SolveEditRace")
+        instancia_id = f"lc-solveeditrace-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_token, instancia_id)
+
+        original_solve_instance = api_module.solve_instance
+
+        def racing_solve_instance(instance):
+            patch_response = client.patch(
+                f"/instances/{instancia_id}/clients/1",
+                json={"x": 10.0, "y": 10.0, "address": "Dirección corregida en la carrera"},
+                headers={"Authorization": f"Bearer {owner_token}"},
+            )
+            assert patch_response.status_code == 200
+            return original_solve_instance(instance)
+
+        with patch.object(api_module, "solve_instance", racing_solve_instance):
+            response = client.post(
+                f"/instances/{instancia_id}/solve",
+                headers={"Authorization": f"Bearer {owner_token}"},
+            )
+        assert response.status_code == 200
+
+        # Sin el fix, el save_instance final (con el snapshot T0, antes del
+        # PATCH) pisaba la edición con la dirección VIEJA — se verifica
+        # releyendo directo de Postgres, igual que el test hermano de
+        # reschedule (no hay GET /instances/{id} de detalle).
+        from backend_python.config import get_config
+        from backend_python.persistence.postgres_adapter import PostgreSQLAdapter as PGA
+        from backend_python.api import _namespaced_id
+
+        account_id = client.get("/auth/me", headers={"Authorization": f"Bearer {owner_token}"}).json()["account_id"]
+        namespaced_id = _namespaced_id(account_id, instancia_id)
+
+        adapter = PGA(get_config().DATABASE_URL)
+        try:
+            reloaded = adapter.load_instance(namespaced_id, account_id=account_id)
+        finally:
+            adapter.close()
+        edited_client = next(c for c in reloaded.clientes if c.id == 1)
+        assert edited_client.address == "Dirección corregida en la carrera"
+
     def test_reschedule_creates_new_instance_with_pending_only(self):
         client = self._client()
         owner_token = self._register_owner(client, "Lifecycle H")
@@ -1749,6 +1803,29 @@ class TestOrderLifecycle:
         )
         assert response.status_code == 200
         assert instancia_id in [i["id"] for i in response.json()]
+
+    def test_list_instances_respects_limit_and_offset(self):
+        """Bug real (Ronda 2, ciclo nuevo, dueño): GET /instances no aceptaba
+        limit/offset — una cuenta con muchas instancias históricas no tenía
+        forma de acotar la respuesta, sin límite declarado en SPEC.md pese
+        al objetivo de escala del proyecto."""
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle Pagination")
+        ids = [f"lc-page-{uuid.uuid4().hex[:8]}" for _ in range(3)]
+        for iid in ids:
+            self._solve_instance(client, owner_token, iid)
+
+        page1 = client.get("/instances", params={"limit": 2}, headers={"Authorization": f"Bearer {owner_token}"})
+        assert page1.status_code == 200
+        assert len(page1.json()) == 2
+
+        no_limit = client.get("/instances", headers={"Authorization": f"Bearer {owner_token}"})
+        assert no_limit.status_code == 200
+        assert len(no_limit.json()) >= 3  # comportamiento sin limit: idéntico al de siempre
+
+        assert client.get(
+            "/instances", params={"limit": 0}, headers={"Authorization": f"Bearer {owner_token}"}
+        ).status_code == 422
 
     def test_instance_summary_includes_created_at(self):
         client = self._client()

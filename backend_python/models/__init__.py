@@ -30,6 +30,11 @@ class Cliente:
     customer_name: Optional[str] = None
     customer_phone: Optional[str] = None
     address: Optional[str] = None
+    # updated_at (Ronda 2, ciclo nuevo, operario): snapshot de
+    # clientes.updated_at al momento de load_instance() — save_instance lo
+    # usa para optimistic locking (no pisar una edición concurrente de
+    # update_client con los valores viejos de un solve en curso).
+    updated_at: Optional[str] = None
 
     def __post_init__(self):
         if self.demanda <= 0:

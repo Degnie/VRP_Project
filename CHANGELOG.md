@@ -89,6 +89,25 @@ Dueño y repartidor rompieron su racha de rondas limpias con hallazgos nuevos y 
 
 ---
 
+## [0.7.7] — 2026-08-02
+
+### 🔍 Ronda 2 de auditoría por roles (ciclo nuevo)
+
+Dueño: 2 hallazgos. Operario: 1 hallazgo. Repartidor: cero hallazgos.
+
+### ✨ Added
+- **Migración `0009`:** `clientes.updated_at` (`TIMESTAMP DEFAULT CURRENT_TIMESTAMP`) para optimistic locking (ver fix de operario abajo).
+
+### 🐛 Fixed
+- **`/auth/register` podía dejar una cuenta huérfana sin usuario:** `create_account()` y `create_user()` eran dos escrituras independientes, cada una con su propio commit — si la segunda fallaba por cualquier motivo que no fuera el email duplicado (ya capturado aparte), la cuenta quedaba huérfana sin usuario, sin ningún endpoint ni proceso para detectarla o recuperarla. Fix: nuevo método `create_account_with_user` en `PostgreSQLAdapter` hace ambos `INSERT` en un solo cursor con un solo commit/rollback — atómico. Test: `test_register_leaves_no_orphaned_account_if_user_insert_fails` (`tests/integration/test_auth_flow.py`).
+- **Lost-update entre `POST /instances/{id}/solve` y `PATCH /instances/{id}/clients/{id}` concurrentes:** `_solve_and_persist` lee la instancia completa en T0, corre el pipeline NN→SA→3-opt (puede tardar segundos según RNF-002/003), y al terminar hace un upsert incondicional del snapshot T0 — si un `update_client` de otro operario commiteaba una edición entre T0 y ese `save_instance` final, la edición se perdía en silencio (ambos requests devolvían `200`). Fix: optimistic locking — `save_instance` solo pisa `demand`/`x`/`y`/contacto de un cliente si su `updated_at` en Postgres sigue coincidiendo con el snapshot que trajo `load_instance()` al iniciar el solve (`WHERE clientes.updated_at IS NOT DISTINCT FROM %s` en la cláusula `DO UPDATE`); si cambió, la edición concurrente gana. `update_client` ahora setea `updated_at=CURRENT_TIMESTAMP` en cada corrección. Test: `test_solve_does_not_overwrite_concurrent_client_edit`.
+- **`GET /instances`, `GET /vehicle-catalog`, `GET /auth/users` sin paginación:** ninguno de los tres aceptaba `limit`/`offset` pese al objetivo de escala declarado del proyecto ("50 a 100k+ clientes") — una cuenta con muchas instancias/usuarios/tipos de vehículo históricos no tenía forma de acotar la respuesta. Fix: `limit`/`offset` opcionales en los tres endpoints y sus queries SQL subyacentes (`LIMIT`/`OFFSET`); sin `limit`, comportamiento idéntico al de siempre (trae todo) — no rompe ningún caller existente. Tests: `test_list_instances_respects_limit_and_offset`, `test_list_vehicle_catalog_respects_limit_and_offset`, `test_list_team_respects_limit_and_offset`.
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 223 passed / 0 failed (218 previos + 5 nuevos), `test-cpp` 1/1 passed, `traceability` 35/35 IDs cubiertos (sin cambio, ningún hallazgo requirió ID de dominio nuevo).
+
+---
+
 ## ⬆️ MIGRACIÓN: Academia → Producción (2026-07-23 en adelante)
 
 **Este punto marca la transición arquitectónica de la solución académica Qt/C++ al SaaS híbrido Python/C++.**
