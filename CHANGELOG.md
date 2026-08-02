@@ -108,6 +108,20 @@ Dueño: 2 hallazgos. Operario: 1 hallazgo. Repartidor: cero hallazgos.
 
 ---
 
+## [0.7.8] — 2026-08-02
+
+### 🔍 Ronda 3 de auditoría por roles (ciclo nuevo) — sin cambios de código
+
+Dueño: 1 hallazgo, descartado tras análisis (ver abajo). Operario: cero hallazgos. Repartidor: cero hallazgos (3ª ronda limpia consecutiva).
+
+### Rechazado / Descartado
+- **"Una cuenta puede quedar sin ningún dueño activo" (hallazgo del rol dueño):** se implementó un guard en `set_user_active` que contaba dueños activos antes de desactivar a otro dueño, pero al escribir el test de regresión se confirmó que es matemáticamente inalcanzable con los guards ya existentes: (1) nadie puede autodesactivarse (`user_id == current_user.user_id` → 400), y (2) solo un dueño puede desactivar a otro dueño (línea que ya exige `current_user.role == "dueño"`). Como el actor que ejecuta la desactivación es siempre un dueño que sigue activo después de la operación (no se autodesactivó), matemáticamente **siempre** queda al menos un dueño activo — el actor mismo. El escenario que motivó el hallazgo (cuenta sin ningún dueño activo) requeriría que el propio endpoint permitiera desactivarse a sí mismo, lo cual ya está bloqueado. Se revirtió el guard (código muerto, nunca alcanzable) en vez de dejarlo como falsa sensación de seguridad.
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 223 passed / 0 failed (sin cambio, ningún test nuevo sobrevivió), `test-cpp` 1/1 passed, `traceability` 35/35 IDs cubiertos.
+
+---
+
 ## ⬆️ MIGRACIÓN: Academia → Producción (2026-07-23 en adelante)
 
 **Este punto marca la transición arquitectónica de la solución académica Qt/C++ al SaaS híbrido Python/C++.**
