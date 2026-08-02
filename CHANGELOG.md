@@ -7,6 +7,22 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ---
 
+## [0.7.2] — 2026-08-02
+
+### 🔍 Ronda 1 de auditoría por roles (ciclo nuevo, post RN-013/limpieza de deuda de suite)
+
+Ciclo de exploración con un agente por rol de usuario (`agent-workflow/prompts/12-auditoria-roles-claude.md`), posterior a los fixes de rendimiento (RN-013, P-01/P-02) y limpieza de deuda de tests (P-03/P-04). Operario: cero hallazgos. Dueño: 1 hallazgo `[BUG]`. Repartidor: 2 hallazgos `[BUG]`.
+
+### 🐛 Fixed
+- **RN-005/RN-006 (edición de cliente, dueño):** `PATCH /instances/{id}/clients/{cliente_id}` escribía la demanda editada directo a Postgres sin re-validar RN-005 (demanda total ≤ capacidad de flota) ni RN-006 (ningún cliente excede el vehículo más grande) — reglas que sí corren en la creación vía `Instancia.__post_init__`, pero no en la corrección posterior de un cliente ya persistido. La instancia quedaba corrupta en silencio (200 OK) hasta que un `load_instance` posterior (export PDF, reprogramación, delivery-statuses) explotaba con 500 genérico sin manejar. Fix: `update_client` valida demanda total y máximo por vehículo antes de escribir, rechazando con 422 y mensaje en español (`backend_python/api/__init__.py`). Tests: `test_update_client_rejects_demand_exceeding_fleet_capacity`, `test_update_client_rejects_demand_exceeding_largest_vehicle` (`tests/integration/test_order_lifecycle.py`).
+- **Fuga cruzada entre repartidores en `GET /solutions/{instancia_id}`:** a diferencia de `get_my_route`/`update_delivery_status`/`export_solution_pdf`/`get_delivery_statuses` (todos ya blindados en rondas anteriores), este endpoint no filtraba por rol — un repartidor veía `sequence`/`cost`/`vehicle_id` de **todas** las rutas de la solución, incluidas las de otros repartidores. Fix: filtra a la ruta del vehículo asignado cuando `current_user.role == "repartidor"`, mismo patrón que sus endpoints hermanos. Tests: `test_repartidor_get_solution_scoped_to_own_route`, `test_repartidor_get_solution_404_without_assignment`.
+- **`GET /instances` sin enforcement server-side para repartidor:** el filtro a "solo mis instancias asignadas" dependía de que el caller pasara `assigned_only=true` — un repartidor llamando el endpoint directo (sin pasar por el frontend) veía metadata de instancias ajenas de la cuenta entera. Fix: el filtro por repartidor ahora es incondicional al rol, no al query param (que queda aceptado por compatibilidad con el frontend, pero ya no se lee). Test: `test_list_instances_repartidor_scoped_without_assigned_only_param`.
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 210 passed / 0 failed (205 previos + 5 nuevos de esta ronda), `test-cpp` 1/1 passed, `traceability` 33/33 IDs cubiertos (sin cambio, ningún ID nuevo — los 3 bugs citan reglas ya existentes: RN-005, RN-006, RN-COV-001).
+
+---
+
 ## ⬆️ MIGRACIÓN: Academia → Producción (2026-07-23 en adelante)
 
 **Este punto marca la transición arquitectónica de la solución académica Qt/C++ al SaaS híbrido Python/C++.**

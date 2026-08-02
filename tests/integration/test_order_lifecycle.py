@@ -128,6 +128,50 @@ class TestOrderLifecycle:
         assert response.status_code == 200
         assert response.json()["demand"] == 10.0
 
+    def test_update_client_rejects_demand_exceeding_fleet_capacity(self):
+        """Bug real: editar la demanda de un cliente escribía directo a
+        Postgres sin re-validar RN-005 (demanda total <= capacidad de
+        flota) — dejaba la instancia corrupta hasta que un load_instance
+        posterior (export PDF, reprogramación) explotaba con 500.
+
+        spec: RN-005
+        """
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle EditClientOverFleet")
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_token, instancia_id)  # flota: 1 vehiculo, capacidad 100
+
+        response = client.patch(
+            f"/instances/{instancia_id}/clients/1",
+            json={"x": 15.0, "y": 15.0, "demand": 200},
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        assert response.status_code == 422
+
+        # La instancia debe seguir siendo usable (no corrupta) tras el rechazo
+        pdf = client.get(f"/solutions/{instancia_id}/export.pdf", headers={"Authorization": f"Bearer {owner_token}"})
+        assert pdf.status_code == 200
+
+    def test_update_client_rejects_demand_exceeding_largest_vehicle(self):
+        """Bug real: mismo patrón que RN-005 pero para RN-006 (ningún cliente
+        puede exceder la capacidad del vehículo más grande) — sin esta
+        validación, un cliente con demanda editada por encima del máximo
+        vehículo cuelga el builder NearestNeighbor.
+
+        spec: RN-006
+        """
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle EditClientOverVehicle")
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_token, instancia_id, num_vehicles=2)  # capacidad 100 c/u
+
+        response = client.patch(
+            f"/instances/{instancia_id}/clients/1",
+            json={"x": 15.0, "y": 15.0, "demand": 150},
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        assert response.status_code == 422
+
     def test_update_client_without_contact_fields_preserves_existing_contact(self):
         """Bug real: editar solo la coordenada (ej. desde un formulario que
         no tenía el contacto cargado, como tras una reprogramación donde
@@ -966,6 +1010,57 @@ class TestOrderLifecycle:
         )
         assert response.status_code == 403
 
+    def test_repartidor_get_solution_scoped_to_own_route(self):
+        """Bug real (Ronda 1, ciclo nuevo, repartidor): a diferencia de
+        get_my_route/update_delivery_status/export_solution_pdf/
+        get_delivery_statuses, get_solution no restringía al repartidor a su
+        propia ruta — devolvía sequence/cost de TODOS los vehículos de la
+        instancia, incluidas rutas de otros repartidores.
+
+        spec: RN-COV-001
+        """
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle GetSolutionScope")
+        repartidor_token, repartidor_id = self._register_repartidor(client, owner_token)
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+        solve_res = client.post(
+            "/solve",
+            json={
+                "instancia_id": instancia_id,
+                "coordinates": [(10, 10), (20, 20), (30, 30), (40, 40)],
+                "demands": [60, 60, 60, 60],
+                "num_vehicles": 2,
+                "vehicle_capacity": 130,
+                "depot_coordinates": (0, 0),
+            },
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        assert solve_res.status_code == 200
+        self._assign(client, owner_token, instancia_id, {"0": repartidor_id})
+
+        response = client.get(
+            f"/solutions/{instancia_id}",
+            headers={"Authorization": f"Bearer {repartidor_token}"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["routes"]) == 1
+        assert data["routes"][0]["vehicle_id"] == 0
+
+    def test_repartidor_get_solution_404_without_assignment(self):
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle GetSolutionNoAssign")
+        repartidor_token, _ = self._register_repartidor(client, owner_token)
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_token, instancia_id)
+
+        response = client.get(
+            f"/solutions/{instancia_id}",
+            headers={"Authorization": f"Bearer {repartidor_token}"},
+        )
+        assert response.status_code == 200
+        assert response.json()["routes"] == []
+
     def test_reschedule_reflects_client_edit_that_lands_between_snapshot_and_move(self):
         """Bug real (Ronda 17, ciclo nuevo, operario): reschedule_instance
         leía los clientes pendientes UNA vez en memoria (get_pending_clients)
@@ -1470,6 +1565,30 @@ class TestOrderLifecycle:
 
         response = client.get(
             "/instances", params={"assigned_only": "true"},
+            headers={"Authorization": f"Bearer {repartidor_token}"},
+        )
+        assert response.status_code == 200
+        ids = [i["id"] for i in response.json()]
+        assert assigned_id in ids
+        assert unassigned_id not in ids
+
+    def test_list_instances_repartidor_scoped_without_assigned_only_param(self):
+        """Bug real (Ronda 1, ciclo nuevo, repartidor): el filtro a "solo mis
+        instancias asignadas" dependía de que el caller pasara
+        assigned_only=true — un repartidor llamando /instances directo (sin
+        ese query param) veía metadata de instancias ajenas de la cuenta."""
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle ListInstancesNoParam")
+        repartidor_token, repartidor_id = self._register_repartidor(client, owner_token)
+
+        assigned_id = f"lc-assigned-{uuid.uuid4().hex[:8]}"
+        unassigned_id = f"lc-unassigned-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_token, assigned_id)
+        self._solve_instance(client, owner_token, unassigned_id)
+        self._assign(client, owner_token, assigned_id, {"0": repartidor_id})
+
+        response = client.get(
+            "/instances",
             headers={"Authorization": f"Bearer {repartidor_token}"},
         )
         assert response.status_code == 200

@@ -763,16 +763,23 @@ def create_app() -> FastAPI:
     ):
         """Lista instancias de la cuenta del usuario.
 
-        Con assigned_only=true y rol repartidor, filtra a solo las instancias
-        donde tiene una ruta asignada (route_assignments) — evita que vea el
-        ID técnico de instancias ajenas en su selector.
+        Con rol repartidor, siempre filtra a solo las instancias donde tiene
+        una ruta asignada (route_assignments) — evita que vea el ID técnico
+        de instancias ajenas en su selector. `assigned_only` queda aceptado
+        por compatibilidad con el frontend, que ya lo manda; no cambia el
+        resultado (el enforcement ya no depende de que el caller lo pase).
         """
         if not pg_adapter:
             raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
 
         try:
+            # Bug real (Ronda 1, ciclo nuevo, repartidor): el filtro a "solo
+            # mis instancias asignadas" dependía de que el caller pasara
+            # assigned_only=true — un repartidor llamando el endpoint directo
+            # (sin pasar por el frontend) veía metadata de toda la cuenta.
+            del assigned_only  # ponytail: aceptado por compat, ya no se lee — ver docstring
             repartidor_user_id = (
-                current_user.user_id if assigned_only and current_user.role == "repartidor" else None
+                current_user.user_id if current_user.role == "repartidor" else None
             )
             rows = pg_adapter.list_instance_summaries(
                 current_user.account_id, repartidor_user_id=repartidor_user_id
@@ -811,13 +818,24 @@ def create_app() -> FastAPI:
             if not solution:
                 raise HTTPException(status_code=404, detail="Solución no encontrada")
 
+            rutas = solution.rutas
+            # Bug real (Ronda 1, ciclo nuevo, repartidor): este endpoint
+            # devolvía todas las rutas de la solución sin filtrar por rol —
+            # un repartidor veía sequence/cost de vehículos ajenos, mismo
+            # patrón de fuga ya cerrado en my-route/export.pdf/delivery-statuses.
+            if current_user.role == "repartidor":
+                vehicle_id = pg_adapter.get_assigned_vehicle_for_repartidor(
+                    namespaced_id, current_user.user_id
+                ) if pg_adapter else None
+                rutas = [r for r in rutas if r.vehicle_id == vehicle_id]
+
             routes = [
                 {
                     "vehicle_id": ruta.vehicle_id,
                     "sequence": ruta.secuencia,
                     "cost": ruta.costo
                 }
-                for ruta in solution.rutas
+                for ruta in rutas
             ]
 
             # used_osrm no se persiste junto a la solución (Mongo solo guarda
@@ -989,6 +1007,32 @@ def create_app() -> FastAPI:
         customer_name = request.customer_name if "customer_name" in fields_set else current_client.customer_name
         customer_phone = request.customer_phone if "customer_phone" in fields_set else current_client.customer_phone
         address = request.address if "address" in fields_set else current_client.address
+
+        # Bug real (Ronda 1, ciclo nuevo, dueño): editar la demanda escribía
+        # directo a Postgres sin re-validar RN-005/RN-006 (que sí corren en la
+        # creación, vía Instancia.__post_init__) — dejaba la instancia con
+        # demanda total > capacidad de flota o un cliente > vehículo más
+        # grande, corrupción invisible hasta que un load_instance posterior
+        # (export PDF, reprogramación, delivery-statuses) explotaba con 500.
+        if "demand" in fields_set:
+            demanda_total = sum(
+                demand if c.id == cliente_id else c.demanda for c in instance.clientes
+            )
+            if demanda_total > instance.flota.capacidad_total:
+                raise HTTPException(
+                    status_code=422,
+                    detail="La nueva demanda total excede la capacidad de la flota",
+                )
+            max_capacidad_vehiculo = (
+                max(instance.flota.capacidades_vehiculos)
+                if instance.flota.capacidades_vehiculos
+                else instance.flota.capacidad_por_vehiculo
+            )
+            if demand > max_capacidad_vehiculo:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"La nueva demanda excede la capacidad de cualquier vehículo disponible ({max_capacidad_vehiculo})",
+                )
 
         updated = pg_adapter.update_client(
             namespaced_id, cliente_id,
