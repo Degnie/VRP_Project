@@ -68,7 +68,6 @@ PYBIND11_MODULE(vrp_solver, m) {
         .def(py::init<>())
         .def_readwrite("routes", &Solution::routes)
         .def_readwrite("total_cost", &Solution::total_cost)
-        .def("is_valid", &Solution::is_valid)
         .def("count_vehicles", &Solution::count_vehicles)
         .def("calculate_total_cost", &Solution::calculate_total_cost);
 

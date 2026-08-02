@@ -21,11 +21,6 @@ struct Solution {
     std::vector<Route> routes;
     double total_cost = 0.0;
 
-    bool is_valid() const {
-        // TODO: implement validation
-        return true;
-    }
-
     int count_vehicles() const {
         return static_cast<int>(routes.size());
     }
