@@ -44,3 +44,21 @@ class TestBuildRoutePdf:
         solution = Solucion(instancia_id="pdf-missing", rutas=rutas, costo_total=1.0)
         pdf = build_route_pdf(solution, {})
         assert pdf.startswith(b"%PDF-")
+
+    def test_name_with_unsupported_charset_uses_explicit_placeholder(self):
+        """Bug real (Ronda 4, ciclo nuevo, dueño): un nombre con CJK/cirílico/
+        emoji no lanza excepción con las fuentes base14 (Helvetica,
+        WinAnsiEncoding) — reportlab lo sustituye en silencio por una
+        secuencia de 'n' repetidas, indistinguible de un error de imprenta
+        hasta que alguien lo lee en el papel. Se detecta antes de dibujar y
+        se reemplaza por un placeholder explícito."""
+        rutas = [Ruta(vehicle_id=0, secuencia=[1], costo=1.0)]
+        solution = Solucion(instancia_id="pdf-unicode", rutas=rutas, costo_total=1.0)
+        clientes_by_id = {
+            1: Cliente(1, Coordinate(0, 0), 10, customer_name="日本語のテスト"),
+        }
+        pdf = build_route_pdf(solution, clientes_by_id)
+        assert pdf.startswith(b"%PDF-")
+        # truncado a 35 chars (mismo límite que cualquier nombre largo, ver
+        # name[:35] en build_route_pdf) — el placeholder completo no entra.
+        assert b"nombre con caracteres no soportad" in pdf

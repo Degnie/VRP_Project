@@ -15,6 +15,23 @@ from reportlab.pdfgen import canvas
 
 from backend_python.models import Cliente, Solucion
 
+_PLACEHOLDER_UNSUPPORTED_CHARS = "[nombre con caracteres no soportados]"
+
+
+def _pdf_safe(text: str) -> str:
+    """Bug real (Ronda 4, ciclo nuevo, dueño): las fuentes base14 de reportlab
+    (Helvetica) solo cubren WinAnsiEncoding (~Latin-1 extendido) — un nombre
+    con CJK, cirílico o emoji no lanza excepción, reportlab lo sustituye en
+    silencio por una secuencia de 'n' repetidas, indistinguible de un error
+    de imprenta hasta que alguien lo lee en el papel que el repartidor usa
+    para confirmar la entrega. Se detecta antes de dibujar y se reemplaza
+    por un placeholder explícito en vez de dejar la corrupción silenciosa."""
+    try:
+        text.encode("cp1252")
+        return text
+    except UnicodeEncodeError:
+        return _PLACEHOLDER_UNSUPPORTED_CHARS
+
 
 def build_route_pdf(
     solution: Solucion,
@@ -77,9 +94,9 @@ def build_route_pdf(
                 pdf.setFont("Helvetica", 9)
 
             cliente = clientes_by_id.get(client_id)
-            name = (cliente.customer_name if cliente and cliente.customer_name else f"Cliente {client_id}")
-            phone = cliente.customer_phone if cliente and cliente.customer_phone else "—"
-            address = cliente.address if cliente and cliente.address else "—"
+            name = _pdf_safe(cliente.customer_name if cliente and cliente.customer_name else f"Cliente {client_id}")
+            phone = _pdf_safe(cliente.customer_phone if cliente and cliente.customer_phone else "—")
+            address = _pdf_safe(cliente.address if cliente and cliente.address else "—")
 
             pdf.drawString(margin, y, str(stop_num))
             pdf.drawString(margin + 1.5 * cm, y, name[:35])

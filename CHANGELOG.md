@@ -122,6 +122,20 @@ Dueño: 1 hallazgo, descartado tras análisis (ver abajo). Operario: cero hallaz
 
 ---
 
+## [0.7.9] — 2026-08-02
+
+### 🔍 Ronda 4 de auditoría por roles (ciclo nuevo)
+
+Dueño: 1 hallazgo. Operario: cero hallazgos (2ª ronda limpia). Repartidor: cero hallazgos (4ª ronda limpia consecutiva).
+
+### 🐛 Fixed
+- **Export PDF corrompía silenciosamente nombres/direcciones con caracteres fuera de Latin-1:** las fuentes base14 de reportlab (`Helvetica`, `WinAnsiEncoding`) no lanzan excepción ante CJK/cirílico/emoji — sustituyen cada carácter no soportado en silencio por una secuencia de `n` repetidas, indistinguible de un error de imprenta hasta que alguien lo lee en el papel que el repartidor usa para confirmar la entrega. Fix: `_pdf_safe()` en `backend_python/api/export.py` detecta (`str.encode("cp1252")`) si el texto es representable antes de dibujarlo; si no, lo reemplaza por un placeholder explícito (`"[nombre con caracteres no soportados]"`) en vez de dejar la corrupción silenciosa. Test: `test_name_with_unsupported_charset_uses_explicit_placeholder` (`tests/unit/test_export.py`).
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 224 passed / 0 failed (223 previos + 1 nuevo), `test-cpp` 1/1 passed, `traceability` 35/35 IDs cubiertos (sin cambio, comportamiento nuevo sin ID de dominio — no aplica una RN numerada existente ni amerita una nueva por su alcance acotado).
+
+---
+
 ## ⬆️ MIGRACIÓN: Academia → Producción (2026-07-23 en adelante)
 
 **Este punto marca la transición arquitectónica de la solución académica Qt/C++ al SaaS híbrido Python/C++.**
