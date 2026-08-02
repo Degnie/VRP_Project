@@ -693,6 +693,16 @@ def create_app() -> FastAPI:
                 capacidades_vehiculos=request.vehicle_capacities,
             )
             contacts = request.contacts or []
+            # Bug real (Ronda 4, ciclo nuevo, dueño): demands más corto que
+            # coordinates (ej. CSV con una fila sin columna de demanda)
+            # producía IndexError nativo en el comprehension de abajo — no
+            # es ValueError, así que caía al except Exception genérico (500)
+            # en vez del 400 que espera un input mal formado.
+            if len(request.demands) != len(request.coordinates):
+                raise ValueError(
+                    f"demands ({len(request.demands)} elementos) debe tener la misma "
+                    f"longitud que coordinates ({len(request.coordinates)} elementos)"
+                )
             clientes = [
                 # id arranca en 1: el pipeline C++ reserva id=0 para el depósito
                 Cliente(
@@ -871,8 +881,14 @@ def create_app() -> FastAPI:
             # de la solución, fuera de alcance de este fix puntual.
             return SolutionResponse(
                 instancia_id=_strip_namespace(current_user.account_id, solution.instancia_id),
-                total_cost=solution.costo_total,
-                num_routes=len(solution.rutas),
+                # Bug real (Ronda 4, ciclo nuevo, operario): total_cost/
+                # num_routes usaban solution.costo_total/solution.rutas (sin
+                # filtrar) en vez de `rutas` — un repartidor con 1 ruta
+                # asignada veía el costo y conteo de TODA la solución junto
+                # a `routes` ya correctamente acotado a su propia ruta, una
+                # inconsistencia visible en la propia respuesta.
+                total_cost=sum(r.costo for r in rutas),
+                num_routes=len(rutas),
                 routes=routes
             )
 

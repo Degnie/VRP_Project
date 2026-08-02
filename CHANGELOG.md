@@ -37,6 +37,24 @@ La Ronda 2 (0.7.2) cerró limpia en los tres roles — primera ronda limpia del 
 
 ---
 
+## [0.7.4] — 2026-08-02
+
+### 🔍 Ronda 4 de auditoría por roles
+
+Dueño y repartidor rompieron su racha de rondas limpias con hallazgos nuevos y genuinamente distintos entre sí; operario se mantiene limpio (7 rondas consecutivas) pero de paso detectó una inconsistencia en el mismo endpoint que tocó la Ronda 1/3 de repartidor.
+
+### ✨ Added
+- **RN-014 (API - Consistencia coordinates/demands):** `demands` debe tener exactamente la misma longitud que `coordinates` en `/solve` y `/instances/{id}/solve`. Bug real: un `demands` más corto (ej. CSV con una fila sin columna de demanda) producía `IndexError` nativo en el comprehension de construcción de clientes — no es `ValueError`, caía al `except Exception` genérico (500) en vez de un rechazo claro. Fix: valida la longitud antes de construir clientes, rechazando con `400` (mismo mecanismo que RN-006). Test: `test_solve_rejects_demands_length_mismatch` (`tests/unit/test_api_integration.py`).
+- **RN-015 (API - Timestamps con zona horaria explícita):** todo timestamp de la API debe llevar sufijo `Z`. Bug real: `instancias.created_at` es `TIMESTAMP` (naive) en Postgres — sin sufijo de zona, el frontend (`new Date(...)`) interpretaba el string ISO como hora LOCAL del navegador en vez de UTC, desplazando la hora mostrada en el selector de instancias del repartidor según su huso horario. Fix: `postgres_adapter.py` agrega `"Z"` al serializar (Postgres siempre guarda en UTC en este proyecto, sin `TimeZone` custom — no requirió migrar la columna a `TIMESTAMPTZ`). Test: `test_instance_summary_created_at_has_explicit_timezone`.
+
+### 🐛 Fixed
+- **`GET /solutions/{id}` — `total_cost`/`num_routes` sin filtrar para repartidor:** usaban `solution.costo_total`/`solution.rutas` (la solución completa) en vez de la variable `rutas` ya acotada por rol (fix de la Ronda 1) — un repartidor con 1 ruta asignada veía el costo/conteo de TODA la solución junto a `routes` ya correctamente filtrado, una inconsistencia visible en la propia respuesta. Fix: ambos campos ahora derivan de `rutas`. Test: `test_repartidor_get_solution_total_cost_and_num_routes_scoped_to_own_route`.
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 214 passed / 0 failed (211 previos + 3 nuevos), `test-cpp` 1/1 passed, `traceability` 35/35 IDs cubiertos (subió de 33 con RN-014/RN-015).
+
+---
+
 ## ⬆️ MIGRACIÓN: Academia → Producción (2026-07-23 en adelante)
 
 **Este punto marca la transición arquitectónica de la solución académica Qt/C++ al SaaS híbrido Python/C++.**

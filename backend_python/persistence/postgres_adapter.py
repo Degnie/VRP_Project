@@ -276,7 +276,13 @@ class PostgreSQLAdapter:
                 for row in clientes_rows
             ]
 
-            created_at = inst_row[2].isoformat() if inst_row[2] else None
+            # Bug real (Ronda 4, ciclo nuevo, repartidor): created_at es
+            # TIMESTAMP (naive) — sin el sufijo "Z", el frontend interpreta
+            # el string como hora LOCAL del navegador en vez de UTC,
+            # desplazando la hora mostrada según el huso del repartidor.
+            # Postgres siempre guarda en UTC en este proyecto (sin TimeZone
+            # custom), así que el sufijo es correcto sin migrar la columna.
+            created_at = (inst_row[2].isoformat() + "Z") if inst_row[2] else None
             return Instancia(instance_id, depot, flota, clientes, created_at=created_at)
 
         except psycopg2.Error:
@@ -444,7 +450,8 @@ class PostgreSQLAdapter:
                     "num_clients": row[1],
                     "num_vehicles": row[2],
                     "capacity": capacity,
-                    "created_at": row[4].isoformat() if row[4] else None,
+                    # Ver nota de zona horaria en load_instance() más arriba.
+                    "created_at": (row[4].isoformat() + "Z") if row[4] else None,
                     "vehicle_id": vehicle_id,
                 })
             return rows_out

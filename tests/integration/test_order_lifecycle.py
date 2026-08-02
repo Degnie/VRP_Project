@@ -1047,6 +1047,44 @@ class TestOrderLifecycle:
         assert len(data["routes"]) == 1
         assert data["routes"][0]["vehicle_id"] == 0
 
+    def test_repartidor_get_solution_total_cost_and_num_routes_scoped_to_own_route(self):
+        """Bug real (Ronda 4, ciclo nuevo, operario): total_cost/num_routes
+        usaban solution.costo_total/solution.rutas (sin filtrar) en vez de la
+        variable `rutas` ya acotada por rol — un repartidor con 1 ruta
+        asignada veía el costo y conteo de TODA la solución junto a `routes`
+        ya correctamente filtrado, una inconsistencia visible en la propia
+        respuesta.
+
+        spec: RN-COV-001
+        """
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle GetSolutionCostScope")
+        repartidor_token, repartidor_id = self._register_repartidor(client, owner_token)
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+        solve_res = client.post(
+            "/solve",
+            json={
+                "instancia_id": instancia_id,
+                "coordinates": [(10, 10), (20, 20), (30, 30), (40, 40)],
+                "demands": [60, 60, 60, 60],
+                "num_vehicles": 2,
+                "vehicle_capacity": 130,
+                "depot_coordinates": (0, 0),
+            },
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        assert solve_res.status_code == 200
+        self._assign(client, owner_token, instancia_id, {"0": repartidor_id})
+
+        response = client.get(
+            f"/solutions/{instancia_id}",
+            headers={"Authorization": f"Bearer {repartidor_token}"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["num_routes"] == len(data["routes"]) == 1
+        assert data["total_cost"] == data["routes"][0]["cost"]
+
     def test_repartidor_get_solution_404_without_assignment(self):
         client = self._client()
         owner_token = self._register_owner(client, "Lifecycle GetSolutionNoAssign")
@@ -1658,3 +1696,20 @@ class TestOrderLifecycle:
         response = client.get("/instances", headers={"Authorization": f"Bearer {owner_token}"})
         summary = next(i for i in response.json() if i["id"] == instancia_id)
         assert summary["created_at"] is not None
+
+    def test_instance_summary_created_at_has_explicit_timezone(self):
+        """Bug real: created_at venía de una columna TIMESTAMP (naive) sin
+        sufijo de zona horaria — el frontend interpreta un ISO string sin
+        marcador como hora LOCAL del navegador, no UTC, desplazando la hora
+        mostrada según el huso del usuario.
+
+        spec: RN-015
+        """
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle TZ")
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_token, instancia_id)
+
+        response = client.get("/instances", headers={"Authorization": f"Bearer {owner_token}"})
+        summary = next(i for i in response.json() if i["id"] == instancia_id)
+        assert summary["created_at"].endswith("Z")
