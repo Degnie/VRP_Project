@@ -196,6 +196,17 @@ class CoverageZoneRequest(BaseModel):
     """Request para reemplazar el polígono de cobertura de la cuenta."""
     points: List[Tuple[float, float]]
 
+    # RN-COV-002: sin este chequeo, un polígono de 0-2 puntos (no cierra una
+    # superficie real) o con coordenadas fuera de rango se persistía tal
+    # cual — mismo patrón de bug que InstanceRequest.coordinates sin
+    # _validate_lng_lat_pairs (RN-012).
+    @field_validator("points")
+    @classmethod
+    def _validate_points(cls, v: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+        if len(v) < 3:
+            raise ValueError("La zona de cobertura debe tener al menos 3 puntos")
+        return _validate_lng_lat_pairs(v)
+
 
 class CoverageZoneOut(BaseModel):
     """Zona de cobertura de la cuenta."""

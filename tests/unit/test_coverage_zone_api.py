@@ -97,6 +97,32 @@ class TestCoverageZoneAPI:
         assert response.status_code == 200
         assert len(response.json()["points"]) == 3
 
+    def test_put_rejects_fewer_than_3_points(self):
+        """spec: RN-COV-002"""
+        client = self._client()
+        token = self._register_owner(client, "Cobertura H")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        response = client.put(
+            "/coverage-zone",
+            json={"points": [[-77.03, -12.03], [-77.00, -12.03]]},
+            headers=headers,
+        )
+        assert response.status_code == 422
+
+    def test_put_rejects_coordinate_out_of_range(self):
+        """spec: RN-COV-002"""
+        client = self._client()
+        token = self._register_owner(client, "Cobertura I")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        response = client.put(
+            "/coverage-zone",
+            json={"points": [[200.0, -12.03], [-77.00, -12.03], [-77.00, -12.00]]},
+            headers=headers,
+        )
+        assert response.status_code == 422
+
     def test_zone_isolated_between_accounts(self):
         client = self._client()
         token_a = self._register_owner(client, "Cobertura F")
