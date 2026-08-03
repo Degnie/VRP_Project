@@ -81,6 +81,23 @@ Patrón consistente con los dos ciclos anteriores: el rol dueño no llegó a 2 r
 
 ---
 
+## [0.7.15] — 2026-08-03
+
+### 🔍 Ronda 1 de auditoría por roles (ciclo 4, solo dueño)
+
+Cuarto ciclo de auditoría, enfocado solo en el rol dueño (ciclos 1-3 ya corrieron 15 rondas combinadas). Ronda 1: 1 hallazgo `[REGLA NUEVA]` (aprobada), cosmético — no cuenta como ronda limpia.
+
+### 📐 Reglas nuevas
+- **RN-019 (UI - Formato numérico de totales):** todo total agregado que ve el dueño en pantalla (peso, volumen, costo, cantidad) debe formatearse con separador de miles acorde al locale, consistente con el resto de la aplicación.
+
+### 🐛 Fixed
+- **RN-019 — totales de flota sin separador de miles (dueño):** `FleetSelector.tsx` interpolaba `totalWeightKg`/`totalVolumeM3`/`totalVehicles` como números JS crudos, sin `Intl.NumberFormat` — inconsistente con `SolutionSummary.tsx`, que ya formatea `num_routes`/`total_cost` con el mismo patrón. Con una flota realista (decenas de vehículos, miles de kg efectivos combinados) el dueño veía `"18000 kg"` en vez de `"18.000 kg"`, más difícil de leer de un vistazo al planificar la operación del día. Sin impacto funcional — el valor era correcto, solo el formato de presentación. Fix: mismo `Intl.NumberFormat` aplicado a los tres totales (`frontend/src/components/FleetSelector.tsx`). Sin test automatizado (gap de frontend ya documentado); citado como `spec: RN-019 — PENDIENTE` en `tests/unit/test_vehicle_catalog_api.py`.
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 229 passed / 0 failed (sin cambio, fix frontend-only), `test-cpp` 1/1 passed, `traceability` 40/40 (RN-019 agregada y citada como PENDIENTE).
+
+---
+
 ## [0.7.2] — 2026-08-02
 
 ### 🔍 Ronda 1 de auditoría por roles (ciclo nuevo, post RN-013/limpieza de deuda de suite)

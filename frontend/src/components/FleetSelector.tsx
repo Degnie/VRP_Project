@@ -1,5 +1,10 @@
 import type { FleetSelectionEntry, VehicleType } from "../lib/types";
 
+// RN-019: mismo Intl.NumberFormat que SolutionSummary.tsx ya usa para
+// num_routes/total_cost — sin esto, una flota realista (decenas de
+// vehículos, miles de kg) mostraba "18000 kg" en vez de "18.000 kg".
+const numberFormatter = new Intl.NumberFormat();
+
 interface Props {
   vehicleTypes: VehicleType[];
   fleet: FleetSelectionEntry[];
@@ -56,8 +61,9 @@ export function FleetSelector({ vehicleTypes, fleet, onChange }: Props) {
       {totalVehicles > 0 && (
         <div className="fleet-summary">
           <p>
-            {totalVehicles} vehículo{totalVehicles === 1 ? "" : "s"} seleccionado
-            {totalVehicles === 1 ? "" : "s"} · {totalWeightKg} kg efectivos combinados · {totalVolumeM3.toFixed(1)} m³ combinados
+            {numberFormatter.format(totalVehicles)} vehículo{totalVehicles === 1 ? "" : "s"} seleccionado
+            {totalVehicles === 1 ? "" : "s"} · {numberFormatter.format(totalWeightKg)} kg efectivos combinados ·{" "}
+            {numberFormatter.format(Number(totalVolumeM3.toFixed(1)))} m³ combinados
           </p>
           <p className="fleet-order-hint">
             Orden de asignación (mayor a menor capacidad): {order.map((t) => t.name || "?").join(" → ")}

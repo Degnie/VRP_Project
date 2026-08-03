@@ -23,6 +23,12 @@ class TestVehicleCatalogAPI:
     formularios de instancia sin resolver lo tienen seleccionado. El repo no
     tiene test runner de frontend en `make verify` (mismo gap documentado
     para RN-COV-003); verificado con `tsc -b` y revisión manual del flujo.
+
+    RN-019: spec: RN-019 — PENDIENTE. La regla vive enteramente en
+    frontend/src/components/FleetSelector.tsx (Intl.NumberFormat en los
+    totales de flota) — no hay endpoint de backend que la cubra, es
+    puramente de presentación. Mismo gap de test runner de frontend;
+    verificado con `tsc -b` y revisión manual.
     """
 
     def _client(self):
