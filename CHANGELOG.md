@@ -180,6 +180,20 @@ La Ronda 2 cerró limpia (cero hallazgos) — primera ronda limpia de este ciclo
 
 ---
 
+## [0.7.21] — 2026-08-03
+
+### 🔍 Ronda 4 de auditoría por roles (ciclo 5, solo dueño)
+
+Ronda 4: 1 hallazgo `[BUG]` — caso inverso de RN-018 (flota huérfana): acá el huérfano queda en el catálogo mismo, no en la flota de una instancia. Sin ID de regla nueva.
+
+### 🐛 Fixed
+- **Borrar una fila de catálogo con su POST de creación en vuelo dejaba un vehículo huérfano persistido (dueño):** el dueño agrega una fila y tipea el nombre (dispara el POST de creación en segundo plano vía el diff-sync de `InstanceForm.tsx`), y borra la fila antes de que resuelva — `creatingRef` (que evita duplicados) es un `useRef` privado de `InstanceForm.tsx`, nunca expuesto a `VehicleCatalogManager.tsx`, así que el botón "×" no tenía ningún guard contra esto. Cuando el POST resolvía, ni el diff-sync ni el manejo de la respuesta encontraban la fila (ya no estaba en `vehicleTypes`), así que `synced` nunca se actualizaba — el vehículo quedaba persistido en el backend, invisible en la sesión, y reaparecía al recargar la página. Fix: nuevo state `creatingIds` que espeja `creatingRef` (para poder disparar re-render) pasado como prop a `VehicleCatalogManager`, que deshabilita el botón "×" mientras el id está creándose (`frontend/src/components/InstanceForm.tsx`, `frontend/src/components/VehicleCatalogManager.tsx`). Sin test automatizado (gap de frontend ya documentado); no requiere cita de traceability (sin ID de regla nuevo).
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 229 passed / 0 failed (sin cambio, fix frontend-only), `test-cpp` 1/1 passed, `traceability` 42/42 (sin cambio).
+
+---
+
 ## [0.7.2] — 2026-08-02
 
 ### 🔍 Ronda 1 de auditoría por roles (ciclo nuevo, post RN-013/limpieza de deuda de suite)

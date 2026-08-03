@@ -20,9 +20,15 @@ interface Props {
   // update) que falló — antes esto se tragaba en silencio y la fila se veía
   // "normal" en pantalla aunque nunca se hubiera persistido en el backend.
   syncErrors?: Map<string, string>;
+  // Bug real (Ronda 4, ciclo 5, dueño): borrar una fila cuyo POST de
+  // creación seguía en vuelo la sacaba de vehicleTypes/synced antes de que
+  // el POST resolviera — ni el diff-sync ni el manejo de la respuesta
+  // podían encontrarla para borrarla del backend, dejando un tipo de
+  // vehículo huérfano persistido que reaparecía al recargar la página.
+  creatingIds?: Set<string>;
 }
 
-export function VehicleCatalogManager({ vehicleTypes, onChange, onImported, syncErrors }: Props) {
+export function VehicleCatalogManager({ vehicleTypes, onChange, onImported, syncErrors, creatingIds }: Props) {
   const [open, setOpen] = useState(vehicleTypes.length === 0);
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -170,7 +176,9 @@ export function VehicleCatalogManager({ vehicleTypes, onChange, onImported, sync
                   type="button"
                   className="row-remove"
                   onClick={() => removeType(type.id)}
+                  disabled={creatingIds?.has(type.id)}
                   aria-label={`Eliminar vehículo ${type.name || "sin nombre"}`}
+                  title={creatingIds?.has(type.id) ? "Guardando… esperá a que termine para eliminar" : undefined}
                 >
                   ×
                 </button>

@@ -63,6 +63,15 @@ export function InstanceForm({ onSubmit, isSolving, coveragePoints }: Props) {
   // draft se re-detecta como "toCreate", disparando un segundo POST para el
   // mismo vehículo (duplicado real, visto de forma intermitente en CI).
   const creatingRef = useRef<Set<string>>(new Set());
+  // Bug real (Ronda 4, ciclo 5, dueño): borrar una fila mientras su POST de
+  // creación seguía en vuelo (creatingRef, arriba) no tenía ningún guard en
+  // el botón "×" — la fila desaparecía de vehicleTypes/synced antes de que
+  // el POST resolviera, así que ni el diff-sync ni el manejo de la respuesta
+  // encontraban la fila para borrarla del backend. Quedaba un tipo de
+  // vehículo huérfano persistido, invisible en la sesión pero que reaparecía
+  // al recargar. creatingRef (useRef) no dispara re-render, así que se
+  // espeja en este state para poder deshabilitar el botón reactivamente.
+  const [creatingIds, setCreatingIds] = useState<Set<string>>(new Set());
   // id -> JSON del último payload que falló al guardar (create/update). Sin
   // esto, un error del backend (ej. nombre demasiado largo) se tragaba en
   // silencio (.catch(() => null)) y el efecto reintentaba el MISMO payload
@@ -133,6 +142,7 @@ export function InstanceForm({ onSubmit, isSolving, coveragePoints }: Props) {
       }
       for (const draft of toCreate) {
         creatingRef.current.add(draft.id);
+        setCreatingIds(new Set(creatingRef.current));
         const created = await apiCreateVehicleType(draft).catch((err: Error) => {
           failedRef.current.set(draft.id, JSON.stringify(draft));
           setCatalogSyncErrors((prev) => new Map(prev).set(draft.id, err.message));
@@ -173,6 +183,7 @@ export function InstanceForm({ onSubmit, isSolving, coveragePoints }: Props) {
         // nuevo — un segundo POST duplicado para la misma fila (bug real:
         // terminaba creando 2-3 filas separadas en vez de una).
         creatingRef.current.delete(draft.id);
+        setCreatingIds(new Set(creatingRef.current));
       }
       for (const t of toUpdate) {
         const saved = await updateVehicleType(t).catch((err: Error) => {
@@ -458,6 +469,7 @@ export function InstanceForm({ onSubmit, isSolving, coveragePoints }: Props) {
           for (const t of imported) syncedRef.current.set(t.id, t);
         }}
         syncErrors={catalogSyncErrors}
+        creatingIds={creatingIds}
       />
 
       {simpleMode ? (
