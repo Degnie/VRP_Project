@@ -5,8 +5,6 @@
 ## Lote en curso
 | ID | Ítem | Clase | Procedencia | Curadurías sobrevividas |
 |---|---|---|---|---|
-| P-03 | Tests técnicos y de integración pendientes de mapeo o en cuarentena | `[DEUDA DE SUITE]` | `tests/unit/test_persistence.py`, `test_api_integration.py`, etc | 2 |
-| P-04 | Fixtures faltantes para instancias medianas/masivas | `[DEUDA DE SUITE]` | `tests/conftest.py:54,60` | 2 |
 
 ## Backlog ordenado
 | ID | Ítem | Clase | Procedencia | Curadurías sobrevividas |
@@ -25,3 +23,5 @@
 | Cobertura geográfica más allá de Perú | Decisión del usuario: mantener solo Perú — el negocio apunta a mercados locales. Ampliar a otro país es mecánico (`make osrm-prepare` con otro extracto de Geofabrik), sin cambio de arquitectura, así que queda disponible para cuando haya demanda real. | 2026-08-02 |
 | Lógica de reintentos de conexión a BD | Ítem obsoleto — ya resuelto en `0.3.6` (ver `CHANGELOG.md`). `postgres_adapter.py`/`mongodb_adapter.py` ya implementan reintentos con backoff (`CONNECT_RETRIES`). Referenciaba `PHASE_3_FINAL_STATUS.md`, documento de una fase temprana nunca resincronizado con el estado real del código. | 2026-08-02 |
 | Validación nativa extra en C++ `solution.hpp` | Decisión del usuario: eliminar el falso `Solution::is_valid()` (stub que siempre devolvía `true`) en vez de implementar una segunda capa de validación — la validación real de invariantes ya vive en Python (`Solucion.__post_init__`), con mensajes de error en español ya cuidados. Ver commit correspondiente. | 2026-08-02 |
+| P-03 — Tests técnicos y de integración pendientes de mapeo o en cuarentena | `TestSolverPipeline`, `TestAPIFactory` y `test_osrm_client.py` documentados como cuarentena técnica permanente (ver `TESTING_STRATEGY.md` §4); `TestFleetSizeValidation` mapeado a RN-013; `test_python_fallback_produces_feasible_solution` mapeado a RN-011/RN-005/RN-010. Ningún `spec: PENDIENTE` queda en la suite. Ver commit `fa15f78`. | 2026-08-02 |
+| P-04 — Fixtures faltantes para instancias medianas/masivas | `small_instance`/`medium_instance`/`large_instance` en `tests/conftest.py` eran placeholders huérfanos de un modelo de dominio incompatible (dos eran literalmente `return None`), sin uso real en la suite — se eliminaron en vez de completarse. Ver commit `df3b182`. | 2026-08-02 |
