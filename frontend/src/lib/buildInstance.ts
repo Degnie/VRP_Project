@@ -96,7 +96,11 @@ export function buildInstanceRequest(params: BuildInstanceParams): BuildInstance
   );
 
   const request: InstanceRequest = {
-    instancia_id: instanciaId,
+    // RN-016: trim antes de mandar — sin esto, un ID de solo espacios
+    // (borrado accidental del default al escribir rápido) pasaba el POST y
+    // quedaba invisible en la lista de instancias, sin colisionar con el
+    // chequeo de duplicado (App.tsx compara el string crudo).
+    instancia_id: instanciaId.trim(),
     coordinates,
     demands,
     num_vehicles: flatCapacities.length,

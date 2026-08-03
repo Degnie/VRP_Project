@@ -126,6 +126,31 @@ class TestSolveEndpoint:
         response = client.post("/solve", json=request_data, headers=_auth_headers(client))
         assert response.status_code == 422
 
+    def test_solve_rejects_whitespace_only_instancia_id(self):
+        """Bug real (Ronda 4, ciclo 3, dueño): el input HTML `required` del
+        formulario solo bloquea string vacío, no uno de solo espacios (typeo
+        perdido al borrar el default) — sin validador, esa instancia se
+        persistía con ID invisible en la lista, indistinguible de otra igual.
+
+        spec: RN-016
+        """
+        from fastapi.testclient import TestClient
+        from backend_python.api import create_app
+
+        app = create_app()
+        client = TestClient(app)
+
+        request_data = {
+            "instancia_id": "   ",
+            "coordinates": [(10.0, 10.0)],
+            "demands": [10],
+            "num_vehicles": 1,
+            "vehicle_capacity": 100,
+        }
+
+        response = client.post("/solve", json=request_data, headers=_auth_headers(client))
+        assert response.status_code == 422
+
     def test_solve_rejects_demands_length_mismatch(self):
         """Bug real: demands más corto que coordinates (ej. CSV con una fila
         sin columna de demanda) producía IndexError nativo en el

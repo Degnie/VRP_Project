@@ -39,6 +39,23 @@ Ronda 3: 2 hallazgos — 1 `[REGLA NUEVA]` (aprobada) + 1 hallazgo menor resuelt
 
 ---
 
+## [0.7.13] — 2026-08-02
+
+### 🔍 Ronda 4 de auditoría por roles (ciclo 3, solo dueño)
+
+Ronda 4: 1 hallazgo `[REGLA NUEVA]` (aprobada). Posible refinamiento excesivo anotado sin implementar: el timeout de `/solve` (120s) podría repetirse a mayor escala con OSRM e instancias muy grandes — misma área que el fix de timeout de otro ciclo, no se profundizó.
+
+### 📐 Reglas nuevas
+- **RN-016 (API - instancia_id no vacío):** `instancia_id` en `POST /solve` y `POST /instances/{id}/solve` debe ser un string no vacío tras aplicar `strip()` — un valor vacío o compuesto solo por espacios en blanco se rechaza con `422` antes de construir la instancia.
+
+### 🐛 Fixed
+- **RN-016 — `instancia_id` de solo espacios pasaba sin validar (dueño):** el input HTML `required` del formulario solo bloquea string vacío, no uno de solo espacios (ej. un typeo perdido al borrar el default "instancia-1" con Ctrl+A) — el backend tampoco lo rechazaba, así que se persistía una instancia con ID invisible en la lista, indistinguible de otra con el mismo problema, sin colisionar con el chequeo de duplicado del frontend (compara el string crudo sin trim). Fix: `field_validator` en `InstanceRequest.instancia_id` rechaza con `422` si el valor está vacío tras `.strip()` (`backend_python/api/__init__.py`); el frontend además hace `trim()` al construir el request (`frontend/src/lib/buildInstance.ts`) para que el chequeo de duplicado en `App.tsx` compare valores ya normalizados. Test: `test_solve_rejects_whitespace_only_instancia_id` (`tests/unit/test_api_integration.py`).
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 229 passed / 0 failed (228 previos + 1 nuevo), `test-cpp` 1/1 passed, `traceability` 37/37 (RN-016 agregada y cubierta).
+
+---
+
 ## [0.7.2] — 2026-08-02
 
 ### 🔍 Ronda 1 de auditoría por roles (ciclo nuevo, post RN-013/limpieza de deuda de suite)

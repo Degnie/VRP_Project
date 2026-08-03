@@ -121,6 +121,18 @@ class InstanceRequest(BaseModel):
     def _validate_depot(cls, v: Tuple[float, float]) -> Tuple[float, float]:
         return _validate_lng_lat_pairs([v])[0]
 
+    # RN-016: el input HTML `required` del frontend solo bloquea string vacío,
+    # no un valor de solo espacios (typeo perdido al borrar el default) — sin
+    # esto, un instancia_id así pasaba Pydantic y se persistía una instancia
+    # con ID invisible/indistinguible en la lista, sin colisionar con el
+    # chequeo de duplicado (compara el string crudo sin trim).
+    @field_validator("instancia_id")
+    @classmethod
+    def _validate_instancia_id(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("instancia_id no puede estar vacío")
+        return v
+
 
 class SolutionResponse(BaseModel):
     """Response con solución."""
