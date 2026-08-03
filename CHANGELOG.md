@@ -194,6 +194,25 @@ Ronda 4: 1 hallazgo `[BUG]` — caso inverso de RN-018 (flota huérfana): acá e
 
 ---
 
+## [0.7.22] — 2026-08-03
+
+### 🔍 Ronda 5 (última) de auditoría por roles (ciclo 5, solo dueño)
+
+Ronda 5: cero hallazgos.
+
+### Estado de `verify` en esta máquina
+Sin cambios de código — `verify` sigue en el mismo estado verde que el commit anterior (`test-py` 229 passed / 0 failed, `test-cpp` 1/1 passed, `traceability` 42/42).
+
+### 📋 Resumen del ciclo 5 (Rondas 1-5, solo rol dueño)
+
+5 rondas — Ronda 2 fue la única limpia, sin lograr una segunda ronda limpia consecutiva. **Cerrado por tope**, no por rondas limpias. 3 hallazgos corregidos (RN-016 aplicada a un segundo code path, reset de paginación de equipo tras acciones laterales, race de borrado-durante-creación en catálogo), 0 descartados, 0 revertidos, 0 reglas nuevas (todos fueron bugs directos sobre reglas/patrones ya existentes).
+
+### 📋 Resumen acumulado de los 5 ciclos sobre el rol dueño (29 rondas combinadas)
+
+29 rondas, 5 ciclos, ninguno cerrado por rondas limpias consecutivas — todos cerrados por tope. 22 hallazgos corregidos en total a lo largo de los 5 ciclos (bugs directos + reglas nuevas: RN-005/006 revalidación, fuga cruzada de repartidor, RN-COV-002/003/004, RN-013/014/015/016/017/018/019/020, paginación en 2 rondas distintas, PDF vacío, catálogo huérfano en 2 direcciones, reprogramación, entre otros), 1 implementado y revertido (guard de "último dueño activo", confirmado código muerto matemáticamente inalcanzable). El rol dueño mostró una curva de hallazgos decreciente pero no nula ronda a ronda: cada ciclo encontró entre 1 y 5 hallazgos genuinos y distintos entre sí, sin ningún caso real de "refinamiento excesivo" aplicado (el cortacircuito de área se usó activamente para descartar variaciones nichadas de bugs ya cerrados). Con la Ronda 3 del ciclo 4 y la Ronda 2 del ciclo 5 como las únicas rondas limpias aisladas (nunca dos seguidas), la superficie del rol parece estar genuinamente acercándose a su límite práctico, sin haber llegado todavía a la condición formal de cierre por rondas limpias.
+
+---
+
 ## [0.7.2] — 2026-08-02
 
 ### 🔍 Ronda 1 de auditoría por roles (ciclo nuevo, post RN-013/limpieza de deuda de suite)
