@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Sin PostgreSQL/MongoDB/OSRM levantados en este pipeline — los tests
+      # de integración que los necesitan se saltan solos (ADR-005,
+      # metodología "skip if not present": DATABASE_URL/MONGO_URL/OSRM_URL
+      # no están seteadas acá).
+      - name: Run pytest
+        run: pytest tests/
+
+      - name: Check SPEC traceability
+        run: python scripts/check_traceability.py
