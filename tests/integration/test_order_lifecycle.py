@@ -208,6 +208,88 @@ class TestOrderLifecycle:
         pdf = client.get(f"/solutions/{instancia_id}/export.pdf", headers={"Authorization": f"Bearer {owner_token}"})
         assert b"Ana Torres" in pdf.content
 
+    def test_get_client_returns_updated_at(self):
+        """El endpoint nuevo GET /instances/{id}/clients/{id} expone
+        updated_at — el frontend lo consulta antes de abrir el formulario de
+        edición para poder mandarlo de vuelta al guardar (Ronda 5, ciclo
+        nuevo, dueño)."""
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle GetClient")
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_token, instancia_id)
+
+        response = client.get(
+            f"/instances/{instancia_id}/clients/1",
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["id"] == 1
+        # Cliente recién creado por /solve (INSERT puro, nunca UPDATE) — el
+        # DEFAULT CURRENT_TIMESTAMP de la columna ya lo puebla.
+        assert body["updated_at"] is not None
+
+    def test_update_client_rejects_stale_updated_at(self):
+        """Bug real (Ronda 5, ciclo nuevo, dueño): dos ediciones sobre el
+        mismo cliente desde snapshots distintos (dos pestañas, dos usuarios)
+        se pisaban en silencio — customer_name/phone/address siempre viajan
+        en el payload (nunca se omiten desde el formulario real), así que
+        fields_set nunca detectaba la carrera. Se simula: A lee el cliente,
+        B edita y guarda (avanza updated_at), A intenta guardar con el
+        updated_at viejo que tenía — debe rechazarse con 409 en vez de
+        pisar la edición de B."""
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle StaleUpdatedAt")
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_token, instancia_id)
+
+        stale_snapshot = client.get(
+            f"/instances/{instancia_id}/clients/1",
+            headers={"Authorization": f"Bearer {owner_token}"},
+        ).json()
+
+        # "B" edita y guarda — avanza updated_at.
+        b_edit = client.patch(
+            f"/instances/{instancia_id}/clients/1",
+            json={"x": 12.0, "y": 12.0, "customer_phone": "999888777"},
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        assert b_edit.status_code == 200
+
+        # "A" intenta guardar con el updated_at viejo (de ANTES de la edición de B).
+        a_edit = client.patch(
+            f"/instances/{instancia_id}/clients/1",
+            json={
+                "x": 15.0, "y": 15.0, "address": "Dirección de A",
+                "updated_at": stale_snapshot["updated_at"],
+            },
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        assert a_edit.status_code == 409
+
+        # El teléfono que B guardó debe seguir intacto — no lo pisó el intento de A.
+        final = client.get(
+            f"/instances/{instancia_id}/clients/1",
+            headers={"Authorization": f"Bearer {owner_token}"},
+        ).json()
+        assert final["customer_phone"] == "999888777"
+
+    def test_update_client_without_updated_at_skips_guard(self):
+        """Un caller que no manda updated_at (compatibilidad con clientes
+        HTTP viejos) no dispara el guard nuevo — mismo comportamiento que
+        antes de este fix."""
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle NoUpdatedAtGuard")
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_token, instancia_id)
+
+        response = client.patch(
+            f"/instances/{instancia_id}/clients/1",
+            json={"x": 15.0, "y": 15.0},
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        assert response.status_code == 200
+
     def test_update_client_with_explicit_null_clears_contact_field(self):
         """El caller SÍ puede borrar un campo de contacto a propósito
         mandándolo como null explícito — solo omitirlo preserva lo actual."""

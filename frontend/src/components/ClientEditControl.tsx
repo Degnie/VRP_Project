@@ -15,18 +15,49 @@ interface Props {
 // "sobreescribir", perdiendo los estados de entrega ya marcados ese día.
 export function ClientEditControl({ instanciaId, clientId, contact, onSaved }: Props) {
   const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [x, setX] = useState(contact?.x ?? "");
   const [y, setY] = useState(contact?.y ?? "");
   const [customerName, setCustomerName] = useState(contact?.customerName ?? "");
   const [customerPhone, setCustomerPhone] = useState(contact?.customerPhone ?? "");
   const [address, setAddress] = useState(contact?.address ?? "");
+  // Bug real (Ronda 5, ciclo nuevo, dueño): sin esto, dos ediciones desde
+  // snapshots distintos (dos pestañas, dos usuarios) se pisaban en silencio
+  // — customer_name/phone/address siempre viajan en el payload de guardado
+  // (nunca se omiten), así que el backend no tenía forma de detectar que el
+  // snapshot local ya estaba obsoleto. Se refresca desde el backend recién
+  // al abrir el formulario (no se confía en `contact`, que puede venir de
+  // localStorage con un snapshot viejo) y se manda de vuelta al guardar.
+  const [updatedAt, setUpdatedAt] = useState<string | undefined>(undefined);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   if (!open) {
     return (
-      <button type="button" className="btn-tertiary" onClick={() => setOpen(true)}>
-        Editar
+      <button
+        type="button"
+        className="btn-tertiary"
+        disabled={loading}
+        onClick={async () => {
+          setLoading(true);
+          setError(null);
+          try {
+            const fresh = await api.getClient(instanciaId, clientId);
+            setX(String(fresh.x));
+            setY(String(fresh.y));
+            setCustomerName(fresh.customer_name ?? "");
+            setCustomerPhone(fresh.customer_phone ?? "");
+            setAddress(fresh.address ?? "");
+            setUpdatedAt(fresh.updated_at);
+            setOpen(true);
+          } catch (err) {
+            setError((err as Error).message);
+          } finally {
+            setLoading(false);
+          }
+        }}
+      >
+        {loading ? "Cargando…" : "Editar"}
       </button>
     );
   }
@@ -54,6 +85,7 @@ export function ClientEditControl({ instanciaId, clientId, contact, onSaved }: P
         customer_name: customerName.trim() || null,
         customer_phone: customerPhone.trim() || null,
         address: address.trim() || null,
+        updated_at: updatedAt ?? null,
       });
       onSaved({
         x: parsedX,
@@ -64,7 +96,12 @@ export function ClientEditControl({ instanciaId, clientId, contact, onSaved }: P
       });
       setOpen(false);
     } catch (err) {
-      setError((err as Error).message);
+      const message = (err as Error).message;
+      setError(
+        message.includes("editado por otra persona")
+          ? "Este cliente fue editado por otra persona mientras tanto — cerrá y volvé a abrir Editar para ver los datos actuales."
+          : message
+      );
     } finally {
       setSaving(false);
     }

@@ -1,4 +1,5 @@
 import type {
+  ClientDetail,
   CoveragePolygon,
   DeliveryStatus,
   HealthStatus,
@@ -197,6 +198,8 @@ export const api = {
     request<RescheduleResponse>(`/instances/${encodeURIComponent(instanciaId)}/reschedule`, { method: "POST" }),
   solveExistingInstance: (instanciaId: string) =>
     request<SolutionResponse>(`/instances/${encodeURIComponent(instanciaId)}/solve`, { method: "POST" }, SOLVE_TIMEOUT_MS),
+  getClient: (instanciaId: string, clientId: number) =>
+    request<ClientDetail>(`/instances/${encodeURIComponent(instanciaId)}/clients/${clientId}`),
   updateClient: (instanciaId: string, clientId: number, body: UpdateClientRequest) =>
     request<{ id: number; x: number; y: number; demand: number }>(
       `/instances/${encodeURIComponent(instanciaId)}/clients/${clientId}`,

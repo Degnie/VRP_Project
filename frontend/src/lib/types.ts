@@ -132,6 +132,21 @@ export interface UpdateClientRequest {
   customer_name?: string | null;
   customer_phone?: string | null;
   address?: string | null;
+  // updated_at visto al abrir el formulario (ver ClientDetail) — el backend
+  // rechaza con 409 si no coincide con lo persistido (otra edición ganó
+  // mientras tanto), en vez de pisarla en silencio.
+  updated_at?: string | null;
+}
+
+export interface ClientDetail {
+  id: number;
+  x: number;
+  y: number;
+  demand: number;
+  customer_name?: string;
+  customer_phone?: string;
+  address?: string;
+  updated_at?: string;
 }
 
 // --- Zona de cobertura (persistida en el backend, por cuenta — Etapa 1) ---

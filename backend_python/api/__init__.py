@@ -145,6 +145,19 @@ class InstanceSummary(BaseModel):
     created_at: Optional[str] = None
 
 
+class ClientDetailResponse(BaseModel):
+    """Cliente individual con updated_at — base para optimistic locking en
+    PATCH /instances/{id}/clients/{id} (Ronda 5, ciclo nuevo, dueño)."""
+    id: int
+    x: float
+    y: float
+    demand: float
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
+    address: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
 class VehicleTypeRequest(BaseModel):
     """Request para crear/editar un tipo de vehículo del catálogo.
 
@@ -242,6 +255,15 @@ class UpdateClientRequest(BaseModel):
     customer_name: Optional[str] = Field(default=None, max_length=255)
     customer_phone: Optional[str] = Field(default=None, max_length=50)
     address: Optional[str] = Field(default=None, max_length=500)
+    # Bug real (Ronda 5, ciclo nuevo, dueño): dos ediciones del MISMO dueño
+    # desde dos pestañas (o dos usuarios cualquiera) sobre el mismo cliente
+    # se pisaban en silencio — la Tab B, con un snapshot viejo, siempre
+    # manda customer_name/phone/address (nunca los omite, ver
+    # ClientEditControl.tsx) y el UPDATE no tenía forma de saber que esos
+    # valores ya estaban obsoletos. Opcional para no romper callers viejos
+    # (ningún guard si se omite), pero el frontend actualizado siempre lo
+    # manda con el valor que trajo GET /instances/{id}/clients/{id}.
+    updated_at: Optional[str] = Field(default=None)
 
     # Bug real (Ronda 19, ciclo nuevo, dueño): mismo patrón que
     # VehicleTypeRequest.weight_capacity_kg/volume_capacity_m3 (Ronda 18) —
@@ -1039,6 +1061,34 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Cliente no encontrado")
         return {"status": request.status, "note": request.note}
 
+    @app.get("/instances/{instancia_id}/clients/{cliente_id}", response_model=ClientDetailResponse)
+    def get_client(
+        instancia_id: str,
+        cliente_id: int,
+        current_user: CurrentUser = Depends(require_role("dueño", "operario")),
+    ):
+        """Cliente individual con updated_at — el frontend lo consulta antes
+        de abrir el formulario de edición para poder mandar de vuelta el
+        updated_at que vio, y que update_client detecte si alguien más editó
+        el cliente mientras tanto (Ronda 5, ciclo nuevo, dueño)."""
+        if not pg_adapter:
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
+
+        namespaced_id = _namespaced_id(current_user.account_id, instancia_id)
+        instance = pg_adapter.load_instance(namespaced_id, account_id=current_user.account_id)
+        if not instance:
+            raise HTTPException(status_code=404, detail="Instancia no encontrada")
+
+        cliente = next((c for c in instance.clientes if c.id == cliente_id), None)
+        if not cliente:
+            raise HTTPException(status_code=404, detail="Cliente no encontrado")
+
+        return ClientDetailResponse(
+            id=cliente.id, x=cliente.coordenada.x, y=cliente.coordenada.y, demand=cliente.demanda,
+            customer_name=cliente.customer_name, customer_phone=cliente.customer_phone,
+            address=cliente.address, updated_at=cliente.updated_at,
+        )
+
     @app.patch("/instances/{instancia_id}/clients/{cliente_id}")
     def update_client(
         instancia_id: str,
@@ -1067,6 +1117,21 @@ def create_app() -> FastAPI:
             raise HTTPException(
                 status_code=409,
                 detail="Este pedido ya fue reprogramado a otra instancia, no se puede editar acá",
+            )
+
+        # Bug real (Ronda 5, ciclo nuevo, dueño): dos ediciones sobre el
+        # mismo cliente desde snapshots distintos (dos pestañas, dos
+        # usuarios) se pisaban en silencio — customer_name/phone/address
+        # siempre viajan en el payload (ver ClientEditControl.tsx), así que
+        # fields_set nunca detectaba la carrera. Si el caller manda
+        # updated_at (frontend actualizado, vía GET .../clients/{id}) y no
+        # coincide con lo persistido, alguien más editó desde el snapshot —
+        # se rechaza en vez de pisar en silencio. Opcional: un caller viejo
+        # que no lo manda no dispara el guard (comportamiento previo).
+        if request.updated_at is not None and request.updated_at != current_client.updated_at:
+            raise HTTPException(
+                status_code=409,
+                detail="Este cliente fue editado por otra persona mientras tanto — recargá antes de guardar",
             )
 
         # model_fields_set distingue "el caller no mandó este campo" (preservar

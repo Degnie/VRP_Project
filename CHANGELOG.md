@@ -136,6 +136,27 @@ Dueño: 1 hallazgo. Operario: cero hallazgos (2ª ronda limpia). Repartidor: cer
 
 ---
 
+## [0.7.10] — 2026-08-02
+
+### 🔍 Ronda 5 (última) de auditoría por roles — ciclo cerrado por tope
+
+Última ronda del ciclo (tope de 5). Operario (3ª ronda limpia) y repartidor (5ª ronda limpia consecutiva) cierran limpios, pero dueño encontró 1 hallazgo `[BUG]` — el ciclo cierra **por tope**, no por rondas limpias.
+
+### ✨ Added
+- **`GET /instances/{id}/clients/{id}`** (`ClientDetailResponse`): expone un cliente individual con `updated_at` — base para el fix de abajo. El frontend lo consulta al abrir el formulario de edición en vez de confiar en el snapshot de `localStorage` (`ClientGroup`, poblado por el flujo de importación, desconectado del ciclo de vida real del cliente persistido).
+
+### 🐛 Fixed
+- **Lost-update entre dos ediciones del mismo cliente (dos pestañas, dos usuarios) en `PATCH /instances/{id}/clients/{id}`:** a diferencia del fix de Ronda 2 (optimistic locking entre un `solve` concurrente y `update_client`), este caso no estaba cubierto — `customer_name`/`customer_phone`/`address` siempre viajan en el payload del formulario (`ClientEditControl.tsx` nunca los omite, precisamente para poder distinguir "vacío a propósito" de "no tocado"), así que el guard existente de `model_fields_set` nunca detectaba que el snapshot local ya estaba obsoleto — la segunda edición pisaba la primera en silencio, ambos requests devolviendo `200`. Fix: `UpdateClientRequest.updated_at` opcional — si se manda y no coincide con lo persistido, `409` en vez de pisar. El frontend ahora consulta `GET .../clients/{id}` al abrir el formulario (en vez de usar `contact` de `localStorage`) y manda ese `updated_at` de vuelta al guardar. Sin `updated_at` en el request (callers viejos), el guard no aplica — compatible hacia atrás. Tests: `test_get_client_returns_updated_at`, `test_update_client_rejects_stale_updated_at`, `test_update_client_without_updated_at_skips_guard` (`tests/integration/test_order_lifecycle.py`).
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 227 passed / 0 failed (224 previos + 3 nuevos), `test-cpp` 1/1 passed, `traceability` 35/35 IDs cubiertos.
+
+### 📋 Resumen del ciclo de auditoría por roles (Rondas 1-5, 2026-08-02, post cierre por tope de `5cc9b2e`)
+
+5 rondas, cierre nuevamente por tope (dueño encontró hallazgos en 4 de las 5 rondas — Rondas 1, 2, 4, 5 — sin encadenar 2 limpias). Total: 7 hallazgos `[BUG]` corregidos — reconexión de Postgres, guard de `reschedule_instance`, fuga de UI en `RepartidorView.tsx`, registro atómico de cuenta, lost-update solve-vs-edición (optimistic locking vía `clientes.updated_at`), paginación de 3 listados, export PDF con charset seguro, y lost-update edición-vs-edición (optimistic locking end-to-end con endpoint nuevo). 1 hallazgo implementado y revertido tras confirmar que era código muerto (Ronda 3, "cuenta sin dueño activo").
+
+---
+
 ## ⬆️ MIGRACIÓN: Academia → Producción (2026-07-23 en adelante)
 
 **Este punto marca la transición arquitectónica de la solución académica Qt/C++ al SaaS híbrido Python/C++.**
