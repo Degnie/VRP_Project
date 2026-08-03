@@ -13,9 +13,13 @@ interface Props {
   currentUserRole: Role;
 }
 
+const PAGE_SIZE = 50;
+
 export function TeamManagement({ onClose, currentUserRole }: Props) {
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
@@ -30,13 +34,33 @@ export function TeamManagement({ onClose, currentUserRole }: Props) {
   const [inviting, setInviting] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
 
+  // Bug real (Ronda 2, ciclo 3, dueño): 0.7.7 agregó limit/offset al backend
+  // (equipo, catálogo, instancias) porque una cuenta con historial largo no
+  // tenía forma de acotar la respuesta — pero ningún caller del frontend lo
+  // usaba, así que el fix nunca tenía efecto real. Acá se pagina de a
+  // PAGE_SIZE con "cargar más" en vez de traer la tabla entera de una vez.
   const loadTeam = () => {
     setLoading(true);
     api
-      .listTeam()
-      .then(setMembers)
+      .listTeam({ limit: PAGE_SIZE, offset: 0 })
+      .then((page) => {
+        setMembers(page);
+        setHasMore(page.length === PAGE_SIZE);
+      })
       .catch((err) => setError((err as Error).message))
       .finally(() => setLoading(false));
+  };
+
+  const loadMore = () => {
+    setLoadingMore(true);
+    api
+      .listTeam({ limit: PAGE_SIZE, offset: members.length })
+      .then((page) => {
+        setMembers((prev) => [...prev, ...page]);
+        setHasMore(page.length === PAGE_SIZE);
+      })
+      .catch((err) => setError((err as Error).message))
+      .finally(() => setLoadingMore(false));
   };
 
   useEffect(loadTeam, []);
@@ -156,6 +180,12 @@ export function TeamManagement({ onClose, currentUserRole }: Props) {
             ))}
           </tbody>
         </table>
+      )}
+
+      {!loading && hasMore && (
+        <button type="button" className="btn-secondary" onClick={loadMore} disabled={loadingMore}>
+          {loadingMore ? "Cargando…" : "Cargar más"}
+        </button>
       )}
     </div>
   );

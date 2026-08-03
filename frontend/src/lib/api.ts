@@ -99,8 +99,16 @@ export const api = {
   health: () => request<HealthStatus>("/health"),
   solve: (body: InstanceRequest) =>
     request<SolutionResponse>("/solve", { method: "POST", body: JSON.stringify(body) }, SOLVE_TIMEOUT_MS),
-  listInstances: (opts?: { assignedOnly?: boolean }) =>
-    request<InstanceSummary[]>(`/instances${opts?.assignedOnly ? "?assigned_only=true" : ""}`),
+  listInstances: (opts?: { assignedOnly?: boolean; limit?: number; offset?: number }) => {
+    const params = new URLSearchParams();
+    if (opts?.assignedOnly) params.set("assigned_only", "true");
+    if (opts?.limit !== undefined) {
+      params.set("limit", String(opts.limit));
+      params.set("offset", String(opts?.offset ?? 0));
+    }
+    const qs = params.toString();
+    return request<InstanceSummary[]>(`/instances${qs ? `?${qs}` : ""}`);
+  },
   getSolution: (instanciaId: string) =>
     request<SolutionResponse>(`/solutions/${encodeURIComponent(instanciaId)}`),
   exportSolutionPdf: async (instanciaId: string, vehicleId?: number): Promise<Blob> => {
@@ -150,7 +158,10 @@ export const api = {
   me: () => request<UserOut>("/auth/me"),
   createUser: (body: { email: string; password: string; full_name?: string; role: string }) =>
     request<UserOut>("/auth/users", { method: "POST", body: JSON.stringify(body) }),
-  listTeam: () => request<TeamMember[]>("/auth/users"),
+  listTeam: (opts?: { limit?: number; offset?: number }) =>
+    request<TeamMember[]>(
+      `/auth/users${opts?.limit !== undefined ? `?limit=${opts.limit}&offset=${opts?.offset ?? 0}` : ""}`
+    ),
   setUserActive: (userId: string, active: boolean) =>
     request<TeamMember>(`/auth/users/${encodeURIComponent(userId)}`, {
       method: "PATCH",
@@ -158,7 +169,10 @@ export const api = {
     }),
 
   // --- Catálogo de vehículos ---
-  listVehicleCatalog: () => request<VehicleTypeDTO[]>("/vehicle-catalog"),
+  listVehicleCatalog: (opts?: { limit?: number; offset?: number }) =>
+    request<VehicleTypeDTO[]>(
+      `/vehicle-catalog${opts?.limit !== undefined ? `?limit=${opts.limit}&offset=${opts?.offset ?? 0}` : ""}`
+    ),
   createVehicleCatalogEntry: (body: VehicleTypeDTO) =>
     request<VehicleTypeDTO>("/vehicle-catalog", { method: "POST", body: JSON.stringify(body) }),
   updateVehicleCatalogEntry: (id: string, body: VehicleTypeDTO) =>

@@ -7,6 +7,20 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ---
 
+## [0.7.11] — 2026-08-02
+
+### 🔍 Ronda 2 de auditoría por roles (ciclo 3, solo dueño)
+
+Tercer ciclo de auditoría por roles, enfocado exclusivamente en el rol dueño (operario/repartidor ya venían de rondas limpias en ciclos anteriores). Ronda 1: cero hallazgos. Ronda 2 (de confirmación): 1 hallazgo `[BUG]` — no cuenta como ronda limpia, el ciclo continúa.
+
+### 🐛 Fixed
+- **Paginación de `0.7.7` sin efecto real (dueño):** `0.7.7` agregó `limit`/`offset` a `GET /instances`, `GET /vehicle-catalog` y `GET /auth/users` en el backend, pero ningún caller del frontend los pasaba — el fix quedó a medio camino, sin beneficio para una cuenta con historial largo. Al revisar los 3 call sites reales: `listInstances()` solo se usa para un chequeo de ID duplicado (`App.tsx`, necesita ver todos los IDs, no debe paginarse) y el catálogo de vehículos (`InstanceForm.tsx`) es un estado editable con diff-sync automático contra el backend (paginarlo rompería la lógica de diff, que necesita ver todas las filas para detectar altas/bajas). El único listado real, de solo lectura y que crece sin límite en uso normal es la tabla de equipo. Fix: `TeamManagement.tsx` pagina con "Cargar más" (`PAGE_SIZE=50`), `api.ts` expone `limit`/`offset` opcionales en `listTeam`/`listVehicleCatalog`/`listInstances` (estos dos últimos sin cambiar ningún call site existente). Sin test automatizado — el repo no tiene test runner de frontend en `make verify` (mismo gap ya documentado en la Ronda 1 del ciclo 2, fix de `RepartidorView.tsx`); verificado con `tsc -b` (sin errores nuevos respecto a master) y revisión manual del flujo cargar/invitar/desactivar/cargar más.
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 227 passed / 0 failed (sin cambio, fix solo de frontend), `test-cpp` 1/1 passed, `traceability` 35/35 (sin cambio, no cita ningún ID nuevo — completa el trabajo de `0.7.7`, no agrega regla).
+
+---
+
 ## [0.7.2] — 2026-08-02
 
 ### 🔍 Ronda 1 de auditoría por roles (ciclo nuevo, post RN-013/limpieza de deuda de suite)
