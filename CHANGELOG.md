@@ -228,6 +228,27 @@ Los ciclos 1-5 (29 rondas) cerraron siempre por tope, con hallazgos genuinos y d
 
 ---
 
+## [0.7.24] — 2026-08-03
+
+### 🚀 RNF-004, RNF-005 — Formalización de infraestructura (Docker + CI)
+
+Implementación del delta aprobado (`docs/delta-actual.md`, `spec_version v1.2`): empaquetado en contenedores y pipeline de integración continua básico, ambos ausentes hasta ahora.
+
+### Added
+- **`backend_python/Dockerfile` (RNF-004):** imagen `python:3.11-slim`, solo dependencias de runtime (sin toolchain de build del core C++ — corre en el fallback Python de EC-003, decisión explícita para mantener la imagen ligera), usuario no-root (`appuser`). Build context: raíz del repo (`docker build -f backend_python/Dockerfile -t vrp-backend .`), documentado en el propio archivo.
+- **`frontend/Dockerfile` (RNF-004):** build multi-stage — `node:20-slim` compila el estático (`npm ci && npm run build`), `nginxinc/nginx-unprivileged:1.27-alpine` lo sirve en el runtime (puerto 8080, no-root de fábrica; `USER nginx` declarado explícitamente igual). Build context: `frontend/`.
+- **`.dockerignore`:** excluye `node_modules`, `build64`, artefactos de test y `.git` del contexto de build.
+- **`.github/workflows/ci.yml` (RNF-005):** pipeline en `pull_request` hacia `master` — instala dependencias, corre `pytest tests/` y `python scripts/check_traceability.py`. Sin PostgreSQL/MongoDB/OSRM levantados en el runner — los tests de integración que los requieren se saltan solos vía la metodología condicional de ADR-005 (variables de entorno ausentes).
+- **`tests/unit/test_infra_packaging.py`:** 8 tests de verificación estática (existencia de artefactos + contenido mínimo requerido) — `spec: RNF-004` (4 tests), `spec: RNF-005` (4 tests). No ejercitan build real de Docker ni corren el pipeline.
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 237 passed / 0 failed (229 previos + 8 nuevos), `test-cpp` 1/1 passed, `traceability` 44/44 (RNF-004, RNF-005 agregadas y cubiertas).
+
+### Rechazado / Descartado
+- **Compilar el core C++ dentro de la imagen del backend:** habría cumplido también RNF-001/002/003 dentro del contenedor, pero requiere instalar cmake/g++/pybind11 en la imagen — descartado explícitamente por el usuario para mantener RNF-004 ("imágenes ligeras") al pie de la letra; el contenedor corre en el fallback Python (EC-003), más lento pero funcionalmente correcto.
+
+---
+
 ## [0.7.2] — 2026-08-02
 
 ### 🔍 Ronda 1 de auditoría por roles (ciclo nuevo, post RN-013/limpieza de deuda de suite)
