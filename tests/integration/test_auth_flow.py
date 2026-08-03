@@ -14,6 +14,15 @@ POSTGRES_AVAILABLE = os.getenv("DATABASE_URL") is not None
 
 @pytest.mark.skipif(not POSTGRES_AVAILABLE, reason="PostgreSQL not configured")
 class TestAuthFlow:
+    """RN-017: spec: RN-017 — PENDIENTE. La regla vive enteramente en
+    frontend/src/components/TeamManagement.tsx (ConfirmDialog antes de
+    desactivar) — no hay endpoint que la exija, PATCH /auth/users/{id} sigue
+    aceptando active=false sin ningún paso previo del lado del backend por
+    diseño (la confirmación es puramente de UX). El repo no tiene test
+    runner de frontend en `make verify` (mismo gap documentado para
+    RN-COV-003); verificado con `tsc -b` y revisión manual del flujo.
+    """
+
     def _client(self):
         from fastapi.testclient import TestClient
         from backend_python.api import create_app

@@ -56,6 +56,31 @@ Ronda 4: 1 hallazgo `[REGLA NUEVA]` (aprobada). Posible refinamiento excesivo an
 
 ---
 
+## [0.7.14] — 2026-08-03
+
+### 🔍 Ronda 5 (última) de auditoría por roles (ciclo 3, solo dueño)
+
+Ronda 5: 2 hallazgos `[REGLA NUEVA]` (ambos aprobados). Posible refinamiento excesivo anotado sin implementar: `updated_at` de cliente se serializa sin sufijo `"Z"` (inconsistente con RN-015), pero no reproduce el bug original porque el frontend nunca lo parsea como `Date`, solo lo reenvía como string opaco para el guard de optimistic locking.
+
+### 📐 Reglas nuevas
+- **RN-017 (UI - Confirmación al desactivar usuario):** cambiar el estado activo de un usuario del equipo a inactivo requiere confirmación explícita antes de ejecutarse, mismo patrón que borrar o sobreescribir una instancia.
+- **RN-018 (UI - Flota consistente con catálogo vigente):** al borrar del catálogo un tipo de vehículo seleccionado en la flota de una instancia sin resolver, el formulario debe quitarlo de la flota configurada y avisar explícitamente, en vez de descartar la entrada en silencio al construir la solicitud.
+
+### 🐛 Fixed
+- **RN-017 — desactivar usuario sin confirmación (dueño y operario):** `TeamManagement.tsx` llamaba `setUserActive` directo al click de "Desactivar", sin el mismo `ConfirmDialog` ya usado para borrar/sobreescribir instancia — un click en la fila equivocada cortaba el acceso de un operario o repartidor de inmediato, sin ningún paso previo. Además el backend permite tanto a `dueño` como `operario` ejecutar esta acción. Fix: `ConfirmDialog` antes de desactivar (reactivar no lo requiere, no tiene el mismo riesgo) — `frontend/src/components/TeamManagement.tsx`. Sin test automatizado (gap de frontend ya documentado); citado como `spec: RN-017 — PENDIENTE` en `tests/integration/test_auth_flow.py`.
+- **RN-018 — flota huérfana tras borrar un tipo de catálogo en uso (dueño):** `fleet` (conteos por tipo de vehículo) nunca se podaba cuando un tipo seleccionado se borraba del catálogo — `buildInstance.ts` descartaba la entrada en silencio (`if (!type) continue`) al construir `POST /solve`, reduciendo `num_vehicles`/capacidad enviada sin ningún aviso, pudiendo causar un rechazo confuso de RN-005/RN-006 o una solución con menos vehículos de los que el dueño cree haber configurado. Fix: nuevo `useEffect` en `InstanceForm.tsx` poda `fleet` cuando su `vehicleTypeId` ya no existe en `vehicleTypes`, y muestra un aviso explícito. Sin test automatizado (mismo gap); citado como `spec: RN-018 — PENDIENTE` en `tests/unit/test_vehicle_catalog_api.py`.
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 229 passed / 0 failed (sin cambio, ambos fixes son frontend-only), `test-cpp` 1/1 passed, `traceability` 39/39 (RN-017, RN-018 agregadas y citadas como PENDIENTE).
+
+### 📋 Resumen del ciclo 3 (Rondas 1-5, solo rol dueño)
+
+5 rondas — Ronda 1 limpia, luego 4 rondas con hallazgos genuinos y distintos entre sí (paginación de un fix previo incompleto, cobertura desincronizada, PDF vacío, ID de instancia inválido, confirmación faltante, flota huérfana). **Cerrado por tope**, no por rondas limpias — el rol dueño (mayor superficie: catálogo, cobertura, equipo, export, edición, flota) siguió encontrando bugs reales ronda tras ronda, igual que en los ciclos 1 y 2. 7 hallazgos corregidos (2 bugs directos + 5 reglas nuevas: RN-COV-003, RN-016, RN-017, RN-018, más la paginación completada), 0 descartados, 0 revertidos. Todos con TDD completo salvo los 3 frontend-only (RN-COV-003, RN-017, RN-018), que comparten el gap ya documentado: no hay test runner de frontend en `make verify`, verificados con `tsc -b` + revisión manual.
+
+Patrón consistente con los dos ciclos anteriores: el rol dueño no llegó a 2 rondas limpias consecutivas en ningún ciclo hasta ahora — señal de que la superficie de dueño sigue siendo la más grande de la app, no de que el ciclo esté atascado (cada hallazgo de esta ronda fue en un archivo/área distinto al de la ronda anterior, sin ningún "refinamiento excesivo" real aplicado).
+
+---
+
 ## [0.7.2] — 2026-08-02
 
 ### 🔍 Ronda 1 de auditoría por roles (ciclo nuevo, post RN-013/limpieza de deuda de suite)

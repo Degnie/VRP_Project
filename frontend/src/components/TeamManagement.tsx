@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Role, TeamMember } from "../lib/types";
 import { api } from "../lib/api";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 const ROLE_LABELS: Record<Role, string> = {
   dueño: "Dueño",
@@ -83,13 +84,29 @@ export function TeamManagement({ onClose, currentUserRole }: Props) {
     }
   };
 
+  // Bug real (Ronda 5, ciclo 3, dueño — RN-017): desactivar corta el acceso
+  // de esa persona de inmediato con un solo click en la fila equivocada, sin
+  // el mismo paso de confirmación que ya tienen borrar/sobreescribir
+  // instancia — reactivar no tiene ese riesgo, así que solo se confirma al
+  // desactivar a alguien activo.
+  const [confirmingDeactivate, setConfirmingDeactivate] = useState<TeamMember | null>(null);
+
   const handleToggleActive = async (member: TeamMember) => {
     setError(null);
     try {
       await api.setUserActive(member.id, !member.active);
+      setConfirmingDeactivate(null);
       loadTeam();
     } catch (err) {
       setError((err as Error).message);
+    }
+  };
+
+  const handleActionClick = (member: TeamMember) => {
+    if (member.active) {
+      setConfirmingDeactivate(member);
+    } else {
+      handleToggleActive(member);
     }
   };
 
@@ -171,7 +188,7 @@ export function TeamManagement({ onClose, currentUserRole }: Props) {
                 <td>{m.active ? "Activo" : "Inactivo"}</td>
                 <td>
                   {m.id !== currentUserId && (m.role !== "dueño" || currentUserRole === "dueño") && (
-                    <button type="button" className="btn-secondary" onClick={() => handleToggleActive(m)}>
+                    <button type="button" className="btn-secondary" onClick={() => handleActionClick(m)}>
                       {m.active ? "Desactivar" : "Reactivar"}
                     </button>
                   )}
@@ -187,6 +204,14 @@ export function TeamManagement({ onClose, currentUserRole }: Props) {
           {loadingMore ? "Cargando…" : "Cargar más"}
         </button>
       )}
+
+      <ConfirmDialog
+        open={confirmingDeactivate !== null}
+        title="Desactivar usuario"
+        message={`¿Seguro que querés desactivar a "${confirmingDeactivate?.email}"? Pierde acceso a la cuenta de inmediato.`}
+        onCancel={() => setConfirmingDeactivate(null)}
+        onConfirm={() => confirmingDeactivate && handleToggleActive(confirmingDeactivate)}
+      />
     </div>
   );
 }

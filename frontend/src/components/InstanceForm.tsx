@@ -46,6 +46,11 @@ export function InstanceForm({ onSubmit, isSolving, coveragePoints }: Props) {
   // submit por no tener X/Y o estar fuera de cobertura (a diferencia del
   // import CSV, que ya avisa filas omitidas, la carga manual no lo hacía).
   const [skippedClientsWarning, setSkippedClientsWarning] = useState<string | null>(null);
+  // Bug real (Ronda 5, ciclo 3, dueño — RN-018): fleet quedaba con entradas
+  // de tipos ya borrados del catálogo — buildInstance.ts las descarta en
+  // silencio (`if (!type) continue`) al construir la solicitud, reduciendo
+  // num_vehicles/capacidad enviada a /solve sin ningún aviso.
+  const [fleetReducedWarning, setFleetReducedWarning] = useState<string | null>(null);
   const [vehicleTypes, setVehicleTypes] = useState<VehicleType[]>([]);
   const [fleet, setFleet] = useState<FleetSelectionEntry[]>([]);
   const [expandedClientId, setExpandedClientId] = useState<string | null>(null);
@@ -188,6 +193,21 @@ export function InstanceForm({ onSubmit, isSolving, coveragePoints }: Props) {
       }
     })();
   }, [vehicleTypes]);
+
+  // RN-018: si un tipo de vehículo seleccionado en la flota desaparece del
+  // catálogo (fila borrada), se saca de fleet y se avisa — en vez de dejar
+  // que buildInstance.ts la descarte en silencio al armar la solicitud.
+  useEffect(() => {
+    const currentIds = new Set(vehicleTypes.map((t) => t.id));
+    const orphaned = fleet.filter((f) => !currentIds.has(f.vehicleTypeId));
+    if (orphaned.length === 0) return;
+    setFleet((prev) => prev.filter((f) => currentIds.has(f.vehicleTypeId)));
+    setFleetReducedWarning(
+      orphaned.length === 1
+        ? "Se quitó de la flota un tipo de vehículo que fue borrado del catálogo."
+        : `Se quitaron de la flota ${orphaned.length} tipos de vehículo que fueron borrados del catálogo.`
+    );
+  }, [vehicleTypes, fleet]);
 
   // Recalcula cobertura de todos los clientes cada vez que cambia el polígono
   // guardado (dibujar/redibujar/cerrar en App.tsx), no solo al importar.
@@ -449,7 +469,10 @@ export function InstanceForm({ onSubmit, isSolving, coveragePoints }: Props) {
           </div>
         </div>
       ) : (
-        <FleetSelector vehicleTypes={namedVehicleTypes} fleet={fleet} onChange={setFleet} />
+        <>
+          {fleetReducedWarning && <p className="volume-warning-message">{fleetReducedWarning}</p>}
+          <FleetSelector vehicleTypes={namedVehicleTypes} fleet={fleet} onChange={setFleet} />
+        </>
       )}
 
       <fieldset className="clients-fieldset">

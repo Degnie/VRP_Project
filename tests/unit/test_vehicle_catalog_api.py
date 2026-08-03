@@ -14,7 +14,16 @@ POSTGRES_AVAILABLE = os.getenv("DATABASE_URL") is not None
 
 @pytest.mark.skipif(not POSTGRES_AVAILABLE, reason="PostgreSQL not configured")
 class TestVehicleCatalogAPI:
-    """spec: CU-CAT-001, RN-CAT-001, RN-CAT-002"""
+    """spec: CU-CAT-001, RN-CAT-001, RN-CAT-002
+
+    RN-018: spec: RN-018 — PENDIENTE. La regla vive enteramente en
+    frontend/src/components/InstanceForm.tsx (useEffect que poda `fleet` y
+    avisa cuando un tipo seleccionado desaparece de `vehicleTypes`) — no hay
+    endpoint de backend que la cubra, el catálogo no sabe nada de qué
+    formularios de instancia sin resolver lo tienen seleccionado. El repo no
+    tiene test runner de frontend en `make verify` (mismo gap documentado
+    para RN-COV-003); verificado con `tsc -b` y revisión manual del flujo.
+    """
 
     def _client(self):
         from fastapi.testclient import TestClient
