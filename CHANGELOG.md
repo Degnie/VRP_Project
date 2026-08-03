@@ -132,6 +132,26 @@ La Ronda 3 cerró limpia (cero hallazgos) — primera ronda limpia de este ciclo
 
 ---
 
+## [0.7.18] — 2026-08-03
+
+### 🔍 Ronda 5 (última) de auditoría por roles (ciclo 4, solo dueño)
+
+Ronda 5: 1 hallazgo `[BUG]` — corrección directa de un patrón ya existente en el mismo archivo (sin ID de regla nueva, mismo criterio que el fix de charset del PDF en `0.7.9`).
+
+### 🐛 Fixed
+- **Estado de reprogramación no se limpiaba al cambiar de instancia (dueño):** `rescheduleResult`/`rescheduleError`/`rescheduledPendingSolveId` en `SolutionSummary.tsx` no se reseteaban cuando `solution.instancia_id` cambiaba — a diferencia de `staleRouteWarning`, que sí lo hace en el mismo archivo (mismo componente sin `key` por instancia, así que no se remonta al navegar). El dueño podía reprogramar la instancia A, navegar a la instancia B sin resolver la reprogramación, y ver el banner/botón "Resolver 'A-reprog-xxxx' ahora" de A todavía visibles sobre B — un click ahí resolvía la instancia equivocada y cambiaba silenciosamente la pantalla de B a la solución de A. Fix: `useEffect` que resetea los tres estados al cambiar `solution.instancia_id`, mismo patrón que `staleRouteWarning` (`frontend/src/components/SolutionSummary.tsx`). Sin test automatizado (gap de frontend ya documentado); no requiere cita de traceability (sin ID de regla nuevo, corrección directa).
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 229 passed / 0 failed (sin cambio, fix frontend-only), `test-cpp` 1/1 passed, `traceability` 42/42 (sin cambio, ningún ID nuevo).
+
+### 📋 Resumen del ciclo 4 (Rondas 1-5, solo rol dueño)
+
+5 rondas — Ronda 3 fue la única limpia, sin lograr una segunda ronda limpia consecutiva. **Cerrado por tope**, no por rondas limpias. 5 hallazgos corregidos (RN-019, RN-020, RN-COV-004, más el bug directo de reprogramación de esta ronda), 0 descartados, 0 revertidos. Todos frontend-only salvo la corrección final (sin ID), documentados con el mismo gap de test runner de frontend ya conocido, verificados con `tsc -b` + revisión manual.
+
+**Nota acumulada de los 4 ciclos sobre el rol dueño (24 rondas combinadas):** el rol dueño nunca llegó a 2 rondas limpias consecutivas hasta la Ronda 3 de este ciclo (la primera ronda limpia de las 24). La Ronda 4 rompió esa racha con un hallazgo genuino y distinto (confirmación de borrado de zona), y la Ronda 5 encontró otro bug real y distinto (estado de reprogramación). Esto sigue sin ser evidencia de un ciclo atascado — cada hallazgo de los últimos 3 ciclos fue en un área o archivo distinto al de la ronda inmediatamente anterior (sin ningún caso real de "refinamiento excesivo" aplicado), consistente con una superficie grande que se va agotando gradualmente, no con un bug repetido siendo refinado indefinidamente.
+
+---
+
 ## [0.7.2] — 2026-08-02
 
 ### 🔍 Ronda 1 de auditoría por roles (ciclo nuevo, post RN-013/limpieza de deuda de suite)

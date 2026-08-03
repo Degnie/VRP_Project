@@ -272,6 +272,16 @@ export function SolutionSummary({ solution, instance, contacts, onSolvedInstance
   // que retipear a mano los clientes reprogramados (inviable con volumen).
   const [rescheduledPendingSolveId, setRescheduledPendingSolveId] = useState<string | null>(null);
   const [solvingRescheduled, setSolvingRescheduled] = useState(false);
+  // Bug real (Ronda 5, ciclo 4, dueño): sin esto, el banner "Se creó la
+  // instancia..." y su botón "Resolver ahora" (que apunta a la instancia
+  // reprogramada, no a la que se ve ahora) seguían visibles al navegar a
+  // otra instancia — mismo patrón ya corregido para staleRouteWarning en
+  // este archivo, pero salteado para este grupo de estado.
+  useEffect(() => {
+    setRescheduleResult(null);
+    setRescheduleError(null);
+    setRescheduledPendingSolveId(null);
+  }, [solution.instancia_id]);
 
   const handleReschedule = async () => {
     setRescheduleError(null);
