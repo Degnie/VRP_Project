@@ -98,6 +98,23 @@ Cuarto ciclo de auditoría, enfocado solo en el rol dueño (ciclos 1-3 ya corrie
 
 ---
 
+## [0.7.16] — 2026-08-03
+
+### 🔍 Ronda 2 de auditoría por roles (ciclo 4, solo dueño)
+
+Ronda 2: 1 hallazgo `[REGLA NUEVA]` (aprobada), cosmético — no cuenta como ronda limpia.
+
+### 📐 Reglas nuevas
+- **RN-020 (UI - Orden de asignación consistente con el solver):** el texto de ayuda que describe el orden de asignación de la flota debe ordenar por capacidad efectiva (nominal × margen de tolerancia), el mismo criterio que usa `buildInstance.ts` al construir `vehicle_capacities` para el solver — no por capacidad nominal, que puede mostrar el orden invertido cuando los tipos de vehículo tienen márgenes de tolerancia distintos entre sí.
+
+### 🐛 Fixed
+- **RN-020 — hint de orden de flota usaba capacidad nominal, no efectiva (dueño):** `FleetSelector.tsx` ordenaba el texto "Orden de asignación" por `weightCapacityKg` nominal, pero `buildInstance.ts` construye `vehicle_capacities` (lo que realmente ve el solver) ordenado por capacidad efectiva (nominal × margen de tolerancia) — con dos tipos de vehículo de margen distinto entre sí (ej. 1000 kg/margen 0.80 = 800 efectivos vs. 900 kg/margen 1.0 = 900 efectivos), el hint mostraba el orden invertido del que realmente usa el solver. Cosmético — el cálculo real siempre fue correcto, solo el texto informativo. Fix: mismo criterio `effectiveWeightKg` (ya existente en el archivo, usado para los totales) aplicado al comparador de orden (`frontend/src/components/FleetSelector.tsx`). Sin test automatizado (gap de frontend ya documentado); citado como `spec: RN-020 — PENDIENTE` en `tests/unit/test_vehicle_catalog_api.py`.
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 229 passed / 0 failed (sin cambio, fix frontend-only), `test-cpp` 1/1 passed, `traceability` 41/41 (RN-020 agregada y citada como PENDIENTE).
+
+---
+
 ## [0.7.2] — 2026-08-02
 
 ### 🔍 Ronda 1 de auditoría por roles (ciclo nuevo, post RN-013/limpieza de deuda de suite)

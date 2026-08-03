@@ -33,7 +33,11 @@ export function FleetSelector({ vehicleTypes, fleet, onChange }: Props) {
   const totalVehicles = selected.reduce((sum, t) => sum + countFor(t.id), 0);
   const totalWeightKg = selected.reduce((sum, t) => sum + countFor(t.id) * effectiveWeightKg(t), 0);
   const totalVolumeM3 = selected.reduce((sum, t) => sum + countFor(t.id) * t.volumeCapacityM3, 0);
-  const order = [...selected].sort((a, b) => b.weightCapacityKg - a.weightCapacityKg);
+  // RN-020: por capacidad EFECTIVA, no nominal — buildInstance.ts ordena
+  // vehicle_capacities así al construir la solicitud real que ve el solver;
+  // ordenar por nominal podía mostrar el orden invertido si los tipos
+  // seleccionados tienen distinto margen de tolerancia entre sí.
+  const order = [...selected].sort((a, b) => effectiveWeightKg(b) - effectiveWeightKg(a));
 
   return (
     <div className="fleet-selector">

@@ -29,6 +29,12 @@ class TestVehicleCatalogAPI:
     totales de flota) — no hay endpoint de backend que la cubra, es
     puramente de presentación. Mismo gap de test runner de frontend;
     verificado con `tsc -b` y revisión manual.
+
+    RN-020: spec: RN-020 — PENDIENTE. La regla vive enteramente en
+    frontend/src/components/FleetSelector.tsx (el hint de orden de
+    asignación ordena por capacidad efectiva, no nominal) — no hay endpoint
+    de backend que la cubra, es texto de ayuda puro. Mismo gap de test
+    runner de frontend; verificado con `tsc -b` y revisión manual.
     """
 
     def _client(self):
