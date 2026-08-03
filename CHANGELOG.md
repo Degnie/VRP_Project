@@ -166,6 +166,20 @@ Quinto ciclo de auditoría, enfocado solo en el rol dueño (ciclos 1-4 ya corrie
 
 ---
 
+## [0.7.20] — 2026-08-03
+
+### 🔍 Ronda 3 (confirmación) de auditoría por roles (ciclo 5, solo dueño)
+
+La Ronda 2 cerró limpia (cero hallazgos) — primera ronda limpia de este ciclo. Esta ronda de confirmación encontró 1 hallazgo `[BUG]` (sin ID de regla nueva, mismo criterio que el fix de reprogramación en `0.7.18`), así que no cumple la condición de 2 rondas limpias consecutivas y el ciclo sigue.
+
+### 🐛 Fixed
+- **Paginación de equipo se resetea a la página 1 tras invitar/activar/desactivar (dueño):** `loadTeam()` en `TeamManagement.tsx` siempre pedía `offset: 0, limit: PAGE_SIZE` — si el dueño ya había usado "Cargar más" para llegar a la página 2 o 3 de una cuenta con más de 50 personas, cualquier invitación o cambio de estado activo colapsaba la vista de vuelta a los primeros 50 registros, sin aviso, perdiendo de la vista a quien acababa de tocar si estaba en una página posterior. Fix: `loadTeam()` recarga tantas filas como ya estaban visibles (`Math.max(members.length, PAGE_SIZE)`) en vez de siempre la primera página (`frontend/src/components/TeamManagement.tsx`). Sin test automatizado (gap de frontend ya documentado); no requiere cita de traceability (sin ID de regla nuevo).
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 229 passed / 0 failed (sin cambio, fix frontend-only), `test-cpp` 1/1 passed, `traceability` 42/42 (sin cambio).
+
+---
+
 ## [0.7.2] — 2026-08-02
 
 ### 🔍 Ronda 1 de auditoría por roles (ciclo nuevo, post RN-013/limpieza de deuda de suite)

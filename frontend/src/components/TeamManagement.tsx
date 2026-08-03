@@ -40,13 +40,22 @@ export function TeamManagement({ onClose, currentUserRole }: Props) {
   // tenía forma de acotar la respuesta — pero ningún caller del frontend lo
   // usaba, así que el fix nunca tenía efecto real. Acá se pagina de a
   // PAGE_SIZE con "cargar más" en vez de traer la tabla entera de una vez.
+  //
+  // Bug real (Ronda 3, ciclo 5, dueño): invitar/activar/desactivar llamaban
+  // loadTeam() con offset:0 fijo, siempre reemplazando members por solo la
+  // primera página — si el dueño ya había usado "Cargar más" para llegar a
+  // la página 2 o 3, la vista colapsaba de vuelta a los primeros PAGE_SIZE
+  // sin aviso, perdiendo de la vista a la persona que acababa de tocar (si
+  // estaba en una página posterior). Ahora recarga tantas filas como ya
+  // estaban visibles, no solo la primera página.
   const loadTeam = () => {
     setLoading(true);
+    const alreadyVisible = Math.max(members.length, PAGE_SIZE);
     api
-      .listTeam({ limit: PAGE_SIZE, offset: 0 })
+      .listTeam({ limit: alreadyVisible, offset: 0 })
       .then((page) => {
         setMembers(page);
-        setHasMore(page.length === PAGE_SIZE);
+        setHasMore(page.length === alreadyVisible);
       })
       .catch((err) => setError((err as Error).message))
       .finally(() => setLoading(false));
