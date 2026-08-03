@@ -213,6 +213,21 @@ Sin cambios de código — `verify` sigue en el mismo estado verde que el commit
 
 ---
 
+## [0.7.23] — 2026-08-03
+
+### 🔍 Ronda 1 y Ronda 2 (confirmación) de auditoría por roles (ciclo 6, solo dueño) — CICLO CERRADO POR RONDAS LIMPIAS
+
+Sexto ciclo de auditoría sobre el rol dueño. Ronda 1: cero hallazgos. Ronda 2 (confirmación): cero hallazgos. **Primera vez, en 6 ciclos (30 rondas combinadas) sobre este rol, que se cumple la condición de cierre por rondas limpias** en vez de por tope.
+
+### Estado de `verify` en esta máquina
+Sin cambios de código en ninguna de las dos rondas — `verify` sigue en el mismo estado verde del commit anterior (`test-py` 229 passed / 0 failed, `test-cpp` 1/1 passed, `traceability` 42/42).
+
+### 📋 Cierre acumulado de los 6 ciclos sobre el rol dueño (30 rondas combinadas)
+
+Los ciclos 1-5 (29 rondas) cerraron siempre por tope, con hallazgos genuinos y decrecientes ronda a ronda. El ciclo 6 (Rondas 1-2) cerró por rondas limpias — señal de que la superficie razonable del rol dueño está agotada por ahora. Total acumulado: 23 hallazgos corregidos entre los 6 ciclos (bugs directos + reglas nuevas RN-013 a RN-020, RN-COV-002 a RN-COV-004, entre otros), 1 implementado y revertido (código muerto confirmado), 0 hallazgos pendientes de aprobación. Ningún caso real de "refinamiento excesivo" aplicado — el cortacircuito de área se usó activamente en cada ciclo para evitar profundizar en variaciones nichadas de bugs ya cerrados.
+
+---
+
 ## [0.7.2] — 2026-08-02
 
 ### 🔍 Ronda 1 de auditoría por roles (ciclo nuevo, post RN-013/limpieza de deuda de suite)
