@@ -1,4 +1,4 @@
-# ESPECIFICACIÓN VRP SOLVER (v1.1)
+# ESPECIFICACIÓN VRP SOLVER (v1.2)
 
 ## 1. Resumen del Negocio
 El sistema es un solver para el Problema de Ruteamiento de Vehículos (VRP) orientado a producción, capaz de escalar de 50 a 100k+ clientes. Optimiza rutas distribuyendo la demanda de los clientes en una flota de vehículos, minimizando el costo total (distancia) y garantizando que se respeten las restricciones de capacidad. Funciona mediante una arquitectura híbrida donde una API en Python orquesta motores de optimización de alto rendimiento escritos en C++.
@@ -79,6 +79,8 @@ El sistema es un solver para el Problema de Ruteamiento de Vehículos (VRP) orie
 * **RNF-001:** Resoluciones para instancias Pequeñas (< 100 nodos) en 10-50ms (CPU).
 * **RNF-002:** Resoluciones para instancias Medianas (100 - 1,000 nodos) en 100-500ms (CPU).
 * **RNF-003:** Resoluciones para instancias Grandes (1,000 - 10,000 nodos) en 1-5 segundos (requiere CPU moderno + 8GB RAM).
+* **RNF-004 (Empaquetado de Aplicación):** El sistema debe proporcionar Dockerfiles separados para backend y frontend, usando imágenes ligeras y configuración sin privilegios de root.
+* **RNF-005 (Integración Continua Básica):** Se debe implementar un pipeline automatizado (ej. GitHub Actions) que corra pytest y `check_traceability.py` en cada PR hacia la rama principal.
 
 ## 9. Fuera de Alcance
 * **Distancias sobre alternativas a OSRM:** Valhalla queda como alternativa conceptual de ruteo, pero no está implementada ni forma parte del scope actual.
