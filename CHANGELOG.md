@@ -152,6 +152,20 @@ Ronda 5: 1 hallazgo `[BUG]` — corrección directa de un patrón ya existente e
 
 ---
 
+## [0.7.19] — 2026-08-03
+
+### 🔍 Ronda 1 de auditoría por roles (ciclo 5, solo dueño)
+
+Quinto ciclo de auditoría, enfocado solo en el rol dueño (ciclos 1-4 ya corrieron 24 rondas combinadas). Ronda 1: 1 hallazgo `[BUG]` — viola directamente RN-016 en un segundo code path que el fix original no cubrió, no requiere regla nueva.
+
+### 🐛 Fixed
+- **RN-016 — modo simple no trimeaba `instancia_id` (dueño):** el fix de RN-016 (`0.7.13`) trimeaba `instancia_id` en `buildInstance.ts`, pero ese archivo solo se usa en modo avanzado (catálogo con vehículos nombrados). El modo simple (`InstanceForm.tsx`, rama `simpleMode` — el estado por defecto en primer uso, sin catálogo configurado) armaba su propio request inline y mandaba el valor crudo. El backend solo rechaza si es 100% espacios tras `.strip()`, no trimea-y-persiste, así que `"instancia-1 "` (espacio al final) pasaba y se persistía con el espacio — dos instancias con el mismo ID visible pero uno con espacio final no se detectaban como duplicado (el chequeo compara string crudo). Fix: mismo `.trim()` aplicado en la rama `simpleMode` de `handleSubmit` (`frontend/src/components/InstanceForm.tsx`). Sin test automatizado (gap de frontend ya documentado, mismo ID RN-016 ya trazado).
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 229 passed / 0 failed (sin cambio, fix frontend-only), `test-cpp` 1/1 passed, `traceability` 42/42 (sin cambio, RN-016 ya trazada).
+
+---
+
 ## [0.7.2] — 2026-08-02
 
 ### 🔍 Ronda 1 de auditoría por roles (ciclo nuevo, post RN-013/limpieza de deuda de suite)

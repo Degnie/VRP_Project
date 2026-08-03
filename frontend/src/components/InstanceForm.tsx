@@ -363,7 +363,10 @@ export function InstanceForm({ onSubmit, isSolving, coveragePoints }: Props) {
       }
       setSubmitError(null);
       const request: InstanceRequest = {
-        instancia_id: instanciaId,
+        // RN-016: mismo trim que buildInstance.ts ya hace en modo avanzado —
+        // este branch (modo simple, sin catálogo con nombre configurado)
+        // armaba el request aparte y se había salteado el fix original.
+        instancia_id: instanciaId.trim(),
         coordinates: validGroups.map((g) => [Number(g.x), Number(g.y)]),
         // El backend exige demanda entera (invariante del dominio: Cliente.demanda en backend_python/models).
         demands,
