@@ -115,6 +115,23 @@ Ronda 2: 1 hallazgo `[REGLA NUEVA]` (aprobada), cosmético — no cuenta como ro
 
 ---
 
+## [0.7.17] — 2026-08-03
+
+### 🔍 Ronda 4 (confirmación) de auditoría por roles (ciclo 4, solo dueño)
+
+La Ronda 3 cerró limpia (cero hallazgos) — primera ronda limpia de este ciclo. Esta ronda de confirmación encontró 1 hallazgo `[REGLA NUEVA]` (aprobado), así que no cumple la condición de 2 rondas limpias consecutivas y el ciclo sigue.
+
+### 📐 Reglas nuevas
+- **RN-COV-004 (Confirmación al borrar zona de cobertura):** borrar la zona de cobertura de la cuenta requiere confirmación explícita antes de ejecutarse, mismo patrón que borrar/sobreescribir una instancia o desactivar un usuario (RN-017).
+
+### 🐛 Fixed
+- **RN-COV-004 — borrar zona de cobertura sin confirmación (dueño):** el botón "Borrar zona" en `CoverageZoneEditor.tsx` ejecutaba `clearCoverageZone()` directo al click, sin `ConfirmDialog` — la única acción destructiva de la app que quedaba fuera de ese patrón (ya aplicado a instancia y a RN-017). Está además al lado de "Redibujar zona" (que no borra nada hasta cerrar el nuevo polígono) en el mismo bloque, con riesgo real de click accidental. Borrar la zona también recalcula `inCoverage: true` para todos los clientes de un formulario de instancia abierto (efecto de RN-COV-003), incluyéndolos en el próximo solve sin que el dueño lo haya decidido. Fix: `ConfirmDialog` antes de ejecutar el borrado (`frontend/src/App.tsx`). Sin test automatizado (gap de frontend ya documentado); citado como `spec: RN-COV-004 — PENDIENTE` en `tests/unit/test_coverage_zone_api.py`.
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 229 passed / 0 failed (sin cambio, fix frontend-only), `test-cpp` 1/1 passed, `traceability` 42/42 (RN-COV-004 agregada y citada como PENDIENTE).
+
+---
+
 ## [0.7.2] — 2026-08-02
 
 ### 🔍 Ronda 1 de auditoría por roles (ciclo nuevo, post RN-013/limpieza de deuda de suite)

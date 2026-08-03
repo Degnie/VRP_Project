@@ -120,7 +120,14 @@ function App() {
     }
   };
 
-  const handleRedrawCoverage = () => {
+  // Bug real (Ronda 4, ciclo 4, dueño — RN-COV-004): a diferencia de borrar
+  // instancia o desactivar usuario, este botón ejecutaba el borrado directo
+  // al click, sin confirmación — y está al lado de "Redibujar zona" (que no
+  // borra nada hasta cerrar el nuevo polígono), con riesgo real de click
+  // accidental entre ambos. Es irreversible y afecta a toda la cuenta.
+  const [confirmingCoverageDelete, setConfirmingCoverageDelete] = useState(false);
+
+  const handleDeleteCoverage = () => {
     // Bug real (Ronda 2, ciclo nuevo, dueño): el polígono se borraba del
     // mapa de forma optimista antes de saber si el DELETE tenía éxito — si
     // fallaba (ej. corte de red), el mapa quedaba sin zona visible mientras
@@ -129,7 +136,10 @@ function App() {
     // borrado, igual que handleCloseCoveragePolygon ya hace con el guardado.
     setCoverageSyncError(null);
     clearCoverageZone()
-      .then(() => setCoveragePoints([]))
+      .then(() => {
+        setCoveragePoints([]);
+        setConfirmingCoverageDelete(false);
+      })
       .catch(() =>
         setCoverageSyncError("No se pudo borrar la zona de cobertura guardada — revisá tu conexión e intentá de nuevo.")
       );
@@ -226,7 +236,7 @@ function App() {
               pointCount={coveragePoints.length}
               onStart={() => setEditingCoverage(true)}
               onClose={handleCloseCoveragePolygon}
-              onRedraw={handleRedrawCoverage}
+              onRedraw={() => setConfirmingCoverageDelete(true)}
             />
             {coverageSyncError && (
               <p className="error-message" role="alert">
@@ -294,6 +304,14 @@ function App() {
           </main>
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmingCoverageDelete}
+        title="Borrar zona de cobertura"
+        message="¿Seguro que querés borrar la zona de cobertura guardada? Los clientes que estaban excluidos por estar fuera de zona pasan a incluirse en el próximo cálculo. Esta acción no se puede deshacer."
+        onCancel={() => setConfirmingCoverageDelete(false)}
+        onConfirm={handleDeleteCoverage}
+      />
 
       <ConfirmDialog
         open={overwriteConfirm !== null}

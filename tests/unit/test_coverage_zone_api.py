@@ -22,6 +22,12 @@ class TestCoverageZoneAPI:
     cubra. El repo no tiene test runner de frontend en `make verify` (mismo
     gap documentado para el fix de RepartidorView.tsx, Ronda 1 del ciclo 2);
     verificado con `tsc -b` (sin errores nuevos) y revisión manual del flujo.
+
+    RN-COV-004: spec: RN-COV-004 — PENDIENTE. La regla vive enteramente en
+    frontend/src/App.tsx (ConfirmDialog antes de clearCoverageZone()) — el
+    endpoint DELETE /coverage-zone sigue sin exigir confirmación por diseño
+    (es puramente de UX). Mismo gap de test runner de frontend; verificado
+    con `tsc -b` y revisión manual del flujo.
     """
 
     def _client(self):
