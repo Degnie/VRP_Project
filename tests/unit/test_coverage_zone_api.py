@@ -14,7 +14,15 @@ POSTGRES_AVAILABLE = os.getenv("DATABASE_URL") is not None
 
 @pytest.mark.skipif(not POSTGRES_AVAILABLE, reason="PostgreSQL not configured")
 class TestCoverageZoneAPI:
-    """spec: CU-COV-001, RN-COV-001"""
+    """spec: CU-COV-001, RN-COV-001
+
+    RN-COV-003: spec: RN-COV-003 — PENDIENTE. La regla vive enteramente en
+    frontend/src/components/InstanceForm.tsx (updateGroupField recalcula
+    inCoverage al editar X/Y) — no hay endpoint ni lógica de backend que
+    cubra. El repo no tiene test runner de frontend en `make verify` (mismo
+    gap documentado para el fix de RepartidorView.tsx, Ronda 1 del ciclo 2);
+    verificado con `tsc -b` (sin errores nuevos) y revisión manual del flujo.
+    """
 
     def _client(self):
         from fastapi.testclient import TestClient

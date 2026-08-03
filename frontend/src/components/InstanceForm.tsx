@@ -245,8 +245,24 @@ export function InstanceForm({ onSubmit, isSolving, coveragePoints }: Props) {
     }
   };
 
+  // Bug real (Ronda 3, ciclo 3, dueño — RN-COV-003): editar X/Y a mano solo
+  // pisaba el valor crudo sin recalcular inCoverage — quedaba pegado al
+  // último cálculo (import, redibujo de zona, o el `true` hardcodeado de una
+  // fila nueva), así que el badge "Fuera de cobertura" y el filtro de /solve
+  // podían quedar desincronizados de la coordenada real hasta que el dueño
+  // volviera a importar o redibujar la zona.
   const updateGroupField = (clientId: string, field: "x" | "y" | ContactField, value: string) => {
-    setGroups((prev) => prev.map((g) => (g.clientId === clientId ? { ...g, [field]: value } : g)));
+    setGroups((prev) =>
+      prev.map((g) => {
+        if (g.clientId !== clientId) return g;
+        const updated = { ...g, [field]: value };
+        if (field !== "x" && field !== "y") return updated;
+        const zone = coveragePoints.length >= 3 ? { points: coveragePoints } : null;
+        updated.inCoverage =
+          updated.x === "" || updated.y === "" ? true : isWithinCoverage([Number(updated.x), Number(updated.y)], zone);
+        return updated;
+      })
+    );
   };
 
   const updatePackage = (clientId: string, packageIdx: number, field: keyof Package, value: string) => {

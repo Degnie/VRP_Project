@@ -21,6 +21,24 @@ Tercer ciclo de auditoría por roles, enfocado exclusivamente en el rol dueño (
 
 ---
 
+## [0.7.12] — 2026-08-02
+
+### 🔍 Ronda 3 de auditoría por roles (ciclo 3, solo dueño)
+
+Ronda 3: 2 hallazgos — 1 `[REGLA NUEVA]` (aprobada) + 1 hallazgo menor resuelto en la misma ronda por decisión explícita del usuario.
+
+### 📐 Reglas nuevas
+- **RN-COV-003 (Recálculo de cobertura ante edición de coordenadas):** el campo `inCoverage` de un cliente en el formulario de instancia debe reevaluarse contra la zona de cobertura vigente cada vez que cambian sus coordenadas X/Y — ya sea por edición manual, alta de fila nueva, o corrección post-import — no solo al importar un CSV o al redibujar el polígono.
+
+### 🐛 Fixed
+- **RN-COV-003 — `inCoverage` no se recalculaba al editar X/Y a mano (dueño):** `InstanceForm.tsx` solo recalculaba `inCoverage` al importar CSV o al redibujar la zona guardada (`useEffect([coveragePoints])`) — editar coordenadas de una fila existente a mano dejaba el badge "Fuera de cobertura" y el filtro de `POST /solve` (`groups.filter(g => g.inCoverage)`) pegados al valor calculado anteriormente, pudiendo incluir en el solve a un cliente realmente fuera de zona o excluir a uno dentro, sin ninguna advertencia visual. Fix: `updateGroupField` recalcula `inCoverage` contra la zona vigente en cada cambio de `x`/`y` (`frontend/src/components/InstanceForm.tsx`). Sin test automatizado — el repo no tiene test runner de frontend en `make verify` (mismo gap documentado en la Ronda 1 del ciclo 2); citado como `spec: RN-COV-003 — PENDIENTE` en `tests/unit/test_coverage_zone_api.py` para trazabilidad, verificado con `tsc -b` (sin errores nuevos respecto a master) y revisión manual del flujo.
+- **RN-EXP-002 (extensión) — PDF en blanco cuando se reprograma el 100% de un vehículo (dueño):** `build_route_pdf` filtra `client_id in rescheduled_client_ids` por parada, pero el guard de `api/__init__.py` solo verifica que el vehículo tenga alguna ruta en la solución original, no que le queden paradas tras el filtro — si el dueño reprogramaba todos los pedidos de un vehículo y exportaba el PDF de la instancia original, obtenía `200` con encabezado y columnas pero cero filas, indistinguible de un error de generación. Fix: si `stop_num == 0` tras el filtro, la página muestra "Todos los pedidos de este vehículo fueron reprogramados." en vez de quedar en blanco (`backend_python/api/export.py`). Test: `test_vehicle_with_all_stops_rescheduled_shows_explicit_message` (`tests/unit/test_export.py`).
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 228 passed / 0 failed (227 previos + 1 nuevo), `test-cpp` 1/1 passed, `traceability` 36/36 (RN-COV-003 agregada, citada como PENDIENTE en `test_coverage_zone_api.py`).
+
+---
+
 ## [0.7.2] — 2026-08-02
 
 ### 🔍 Ronda 1 de auditoría por roles (ciclo nuevo, post RN-013/limpieza de deuda de suite)

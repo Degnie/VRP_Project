@@ -62,3 +62,15 @@ class TestBuildRoutePdf:
         # truncado a 35 chars (mismo límite que cualquier nombre largo, ver
         # name[:35] en build_route_pdf) — el placeholder completo no entra.
         assert b"nombre con caracteres no soportad" in pdf
+
+    def test_vehicle_with_all_stops_rescheduled_shows_explicit_message(self):
+        """Bug real (Ronda 3, ciclo 3, dueño): si se reprograma el 100% de los
+        pedidos de un vehículo, el filtro de rescheduled_client_ids deja la
+        página sin ninguna fila — RN-EXP-002 solo exige que el vehículo tenga
+        alguna ruta en la solución original, así que salía 200 con encabezado
+        y columnas pero cero paradas, indistinguible de un error de generación."""
+        rutas = [Ruta(vehicle_id=0, secuencia=[1, 2], costo=1.0)]
+        solution = Solucion(instancia_id="pdf-all-rescheduled", rutas=rutas, costo_total=1.0)
+        pdf = build_route_pdf(solution, _clientes_by_id(), rescheduled_client_ids={1, 2})
+        assert pdf.startswith(b"%PDF-")
+        assert b"reprogramados" in pdf

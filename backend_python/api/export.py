@@ -104,6 +104,17 @@ def build_route_pdf(
             pdf.drawString(margin + 11 * cm, y, address[:40])
             y -= 0.5 * cm
 
+        # Bug real (Ronda 3, ciclo 3, dueño): si todas las paradas de este
+        # vehículo fueron reprogramadas, el filtro de arriba deja stop_num en
+        # 0 — sin este aviso, RN-EXP-002 solo exige que el vehículo tenga
+        # alguna ruta en la solución original, así que el PDF salía en 200
+        # con encabezado y columnas pero ninguna fila, indistinguible de un
+        # error de generación para quien lo imprime.
+        if stop_num == 0:
+            pdf.setFont("Helvetica-Oblique", 10)
+            pdf.drawString(margin, y, "Todos los pedidos de este vehículo fueron reprogramados.")
+            y -= 0.5 * cm
+
         pdf.showPage()
 
     pdf.save()

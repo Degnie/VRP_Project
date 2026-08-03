@@ -51,6 +51,7 @@ El sistema es un solver para el Problema de Ruteamiento de Vehículos (VRP) orie
 * **RN-CAT-002 (Validación Catálogo):** La creación de un tipo de vehículo en el catálogo requiere pesos y volúmenes estrictamente mayores a cero.
 * **RN-COV-001 (Roles):** Un usuario con rol de Repartidor tiene permisos de lectura sobre las zonas de cobertura, pero no de escritura.
 * **RN-COV-002 (Validez de Zona de Cobertura):** El polígono de una zona de cobertura (`PUT /coverage-zone`) debe tener al menos 3 puntos, y cada punto debe cumplir el mismo rango geográfico que RN-012 (longitud entre -180 y 180, latitud entre -90 y 90). Violarla rechaza la petición con `422`.
+* **RN-COV-003 (Recálculo de cobertura ante edición de coordenadas):** El campo `inCoverage` de un cliente en el formulario de instancia debe reevaluarse contra la zona de cobertura vigente cada vez que cambian sus coordenadas X/Y — ya sea por edición manual, alta de fila nueva, o corrección post-import — no solo al importar un CSV o al redibujar el polígono.
 * **RN-EXP-001 (Exportación):** La generación de la hoja de ruta en PDF permite el filtrado opcional por vehículo específico.
 * **RN-EXP-002 (Filtro de Exportación sin Resultado):** Si `GET /solutions/{id}/export.pdf?vehicle_id=N` recibe un `vehicle_id` que no tiene ninguna ruta en la solución, el sistema responde `404` en vez de un PDF vacío con `200`.
 * **RN-MAT-001 (Fallback Costos):** El sistema debe caer graciosamente al cálculo de distancia euclidiana si el servicio OSRM falla o no está configurado.
