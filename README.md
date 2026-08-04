@@ -93,3 +93,24 @@ docker build -f backend_python/Dockerfile -t vrp-backend .
 - **[API.md](docs/API.md)** — Especificación REST con ejemplos
 - **[CREDITS.md](docs/CREDITS.md)** — Atribuciones académicas
 - **[ADRs](docs/adr/)** — Decisiones arquitectónicas justificadas
+
+---
+
+## 🎓 Créditos y Referencias Académicas
+
+Este proyecto integra investigación e implementaciones de código abierto reconocidas:
+
+| Fuente | Contribución | URL |
+|--------|--------------|-----|
+| **Vroom** | Matrices de costo dirigidas y evaluación asincrónica | https://github.com/VROOM-Project/vroom |
+| **LKH** | Búsqueda local de alto rendimiento (3-opt) | http://www.akira.ruc.dk/~keld/research/LKH/ |
+| **VeRyPy** | Generación modular de heurísticas semilla | https://github.com/tpvasconcelos/routetools |
+| **PyVRP** | Arquitectura híbrida Python/C++ y bindings pybind11 | https://github.com/PyVRP/PyVRP |
+| **pytorch-drl4vrp** | Calibración dinámica de parámetros vía Deep RL | https://github.com/yd-kwon/pytorch-drl4vrp |
+| **jsprit** | Paradigma destructivo/constructivo (Ruin-Recreate) | https://github.com/graphhopper/jsprit |
+| **timefold-quickstarts** | Aislamiento y validación de invariantes | https://github.com/TimefoldAI/timefold-quickstarts |
+| **Rosomaxa (vrp)** | Gestión de memoria inmutable y zero-copy | https://github.com/reinterpretcat/vrp |
+| **Open-VRP** | Filosofía TDD en heurísticas | https://github.com/openvrp/open-vrp |
+| **VRP-RL** | Pre-clasificación de instancias vía clustering | https://github.com/OptMLGroup/VRP-RL |
+
+Ver [CREDITS.md](docs/CREDITS.md) para detalles de cada contribución.
