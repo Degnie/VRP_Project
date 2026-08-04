@@ -270,6 +270,33 @@ Implementación del delta aprobado (`docs/delta-actual.md`, `spec_version v1.3`)
 
 ---
 
+## [0.7.26] — 2026-08-04
+
+### RNF-006, RNF-007 — Cierre de la auditoría final (4 prompts: 04, 06, 07, 12)
+
+Auditoría final antes de declarar el proyecto terminado: se corrieron en paralelo las auditorías 04 (arquitectura y código), 06 (visual/UX/accesibilidad), 07 (infraestructura y seguridad) y 12 (roles), en modo solo-lectura (sin tocar código ni escribir documentación hasta consolidar resultados).
+
+**Resultado:** 04, 06 y 12 aprobaron sin ningún hallazgo — 04 y 06 con la frase de aprobación exacta del prompt ("óptimos para el alcance actual, no se requiere sobreingeniería"), y 12 cerró con **3 rondas limpias consecutivas en los 3 roles simultáneamente** (dueño, operario, repartidor) — la primera vez, tras 7 ciclos y 31 rondas combinadas, que ocurre en los tres roles a la vez y no solo en dueño. 07 aprobó en general pero propuso 2 reglas nuevas de bajo costo, sin bugs reales detrás.
+
+### 📐 Reglas nuevas
+- **RNF-006 (Healthcheck de Aplicación):** el backend debe exponer un endpoint `GET /health` que responda `200` si el proceso está operativo.
+- **RNF-007 (Validación de Build de Imágenes en CI):** el pipeline de CI debe incluir un paso que construya (`docker build`, sin publicar a ningún registro) las imágenes de backend y frontend.
+
+### 🐛 Fixed
+- **RNF-006 — ya estaba implementado:** al revisar antes de escribir cualquier test, `GET /health` (`backend_python/api/__init__.py:640`) ya existía y ya respondía `200` — la auditoría 07 no lo detectó porque su alcance fue Dockerfiles/CI/config, no el código de la API. Sin cambios de código de producción. El test preexistente (`test_health_check_endpoint`) permitía `200` **o** `503`, aceptando un comportamiento que el código real nunca produce (nunca devuelve 503) — corregido a exigir `200` estrictamente, citando `spec: RNF-006`.
+- **RNF-007 — nuevo step de CI:** `.github/workflows/ci.yml` agrega `docker build` (sin push) para backend y frontend después de la validación de trazabilidad. Tests: `test_ci_workflow_builds_backend_image`, `test_ci_workflow_builds_frontend_image`, `test_ci_workflow_does_not_push_images` (`tests/unit/test_infra_packaging.py`).
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 240 passed / 0 failed (237 previos + 3 nuevos), `test-cpp` 1/1 passed, `traceability` 48/48 (RNF-006, RNF-007 agregadas y cubiertas).
+
+### Rechazado / Descartado
+- **Escaneo de dependencias (Dependabot/Snyk/Trivy) como gate de CI:** descartado por la auditoría 07 — dependencias ya pineadas a versión exacta, sin evidencia de CVE real explotable.
+- **Cabeceras de seguridad HTTP adicionales en nginx (HSTS, CSP, X-Frame-Options):** descartado por la auditoría 07 — sin RNF de hardening de cabeceras declarado.
+- **`HEALTHCHECK` en Dockerfile / tuning de workers de uvicorn:** descartado por la auditoría 07 — sin RNF de concurrencia de requests HTTP declarado; el endpoint `GET /health` (RNF-006) ya cubre la necesidad real de verificación de disponibilidad.
+- **Orquestador de contenedores, WAF empresarial, stack de observabilidad pesado:** descartados por la auditoría 07 — exceden la escala de un proyecto libre de bajo tráfico, sin RNF que los justifique.
+
+---
+
 ## [0.7.2] — 2026-08-02
 
 ### 🔍 Ronda 1 de auditoría por roles (ciclo nuevo, post RN-013/limpieza de deuda de suite)
