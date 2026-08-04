@@ -1,9 +1,9 @@
 <delta_aprobado>
-  <resumen> Abordaje del ítem P-05: eliminar la cuarentena (`spec: PENDIENTE`) de `tests/unit/test_persistence.py`. Los 9 tests ya pasan hoy contra PostgreSQL/MongoDB reales — la cuarentena era defensiva, no encubría un fallo. Ninguno citaba una regla de SPEC formal; se proponen y aprueban RN-021 (round-trip sin pérdida) y RN-022 (reconexión automática) para poder destrackear el módulo con trazabilidad real, sin inventar comportamiento nuevo. </resumen>
-  <clasificacion> técnica (deuda de suite) </clasificacion>
-  <ids_nuevos> RN-021 (Persistencia - Round-trip sin pérdida), RN-022 (Persistencia - Reconexión automática) </ids_nuevos>
+  <resumen> Cierre de las 2 reglas nuevas propuestas por la auditoría final de infraestructura (07-infra-gemini.md): RNF-006 (endpoint GET /health) y RNF-007 (validación de docker build en CI, sin push a registro). Ambas de costo bajo, sin bugs reales detrás — mejoras de infraestructura antes de declarar el proyecto terminado. </resumen>
+  <clasificacion> funcional </clasificacion>
+  <ids_nuevos> RNF-006 (Healthcheck de Aplicación), RNF-007 (Validación de Build de Imágenes en CI) </ids_nuevos>
   <ids_modificados> Ninguno </ids_modificados>
   <ids_retirados> Ninguno </ids_retirados>
   <decision_adr> ninguno </decision_adr>
-  <spec_version> v1.3 </spec_version>
+  <spec_version> v1.4 </spec_version>
 </delta_aprobado>

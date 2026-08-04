@@ -1,4 +1,4 @@
-"""Tests de infraestructura de empaquetado y CI (RNF-004, RNF-005).
+"""Tests de infraestructura de empaquetado y CI (RNF-004, RNF-005, RNF-007).
 
 No ejercitan build real de Docker ni ejecutan el pipeline — verifican que
 los artefactos exigidos por el SPEC existan con el contenido mínimo
@@ -48,3 +48,22 @@ class TestContinuousIntegration:
     def test_ci_workflow_triggers_on_pull_request(self):
         content = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         assert "pull_request" in content
+
+
+class TestImageBuildValidation:
+    """spec: RNF-007"""
+
+    def test_ci_workflow_builds_backend_image(self):
+        content = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        assert "docker build" in content
+        assert "backend_python/Dockerfile" in content
+
+    def test_ci_workflow_builds_frontend_image(self):
+        content = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        assert "docker build -t vrp-frontend frontend/" in content
+
+    def test_ci_workflow_does_not_push_images(self):
+        # RNF-007 exige solo build de validación, sin publicar a ningún
+        # registro — "docker push" no debe aparecer en el workflow.
+        content = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        assert "docker push" not in content

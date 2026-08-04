@@ -56,7 +56,14 @@ class TestAPIFactory:
         assert "/solutions/{instancia_id}" in route_paths
 
     def test_health_check_endpoint(self):
-        """Health check endpoint debe responder."""
+        """GET /health responde 200 si el proceso está operativo — para que
+        cualquier orquestador de contenedores/balanceador verifique
+        disponibilidad, incluso si una dependencia externa (Postgres/Mongo)
+        no está disponible (eso lo refleja el campo "status": "degraded",
+        no un código HTTP de error).
+
+        spec: RNF-006
+        """
         from fastapi.testclient import TestClient
         from backend_python.api import create_app
 
@@ -64,7 +71,7 @@ class TestAPIFactory:
         client = TestClient(app)
 
         response = client.get("/health")
-        assert response.status_code in [200, 503]  # OK or Service Unavailable (no DB)
+        assert response.status_code == 200
         data = response.json()
         assert "status" in data
         assert "version" in data
