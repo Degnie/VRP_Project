@@ -1,4 +1,4 @@
-# ESPECIFICACIÓN VRP SOLVER (v1.2)
+# ESPECIFICACIÓN VRP SOLVER (v1.3)
 
 ## 1. Resumen del Negocio
 El sistema es un solver para el Problema de Ruteamiento de Vehículos (VRP) orientado a producción, capaz de escalar de 50 a 100k+ clientes. Optimiza rutas distribuyendo la demanda de los clientes en una flota de vehículos, minimizando el costo total (distancia) y garantizando que se respeten las restricciones de capacidad. Funciona mediante una arquitectura híbrida donde una API en Python orquesta motores de optimización de alto rendimiento escritos en C++.
@@ -51,6 +51,8 @@ El sistema es un solver para el Problema de Ruteamiento de Vehículos (VRP) orie
 * **RN-018 (UI - Flota consistente con catálogo vigente):** Al borrar del catálogo un tipo de vehículo que está seleccionado en la flota de una instancia todavía sin resolver, el formulario debe quitar ese tipo de la flota configurada y avisar explícitamente que la flota quedó reducida — en vez de descartar la entrada en silencio al construir la solicitud de resolución.
 * **RN-019 (UI - Formato numérico de totales):** Todo total agregado que ve el dueño en pantalla (peso, volumen, costo, cantidad) debe formatearse con separador de miles acorde al locale, consistente con el resto de la aplicación — un número de 5+ dígitos sin separador es más difícil de leer al planificar la operación del día.
 * **RN-020 (UI - Orden de asignación consistente con el solver):** El texto de ayuda que describe el orden de asignación de la flota debe ordenar por capacidad efectiva (capacidad nominal × margen de tolerancia), el mismo criterio que usa `buildInstance.ts` al construir `vehicle_capacities` para el solver — no por capacidad nominal, que puede mostrar el orden invertido cuando los tipos de vehículo tienen márgenes de tolerancia distintos entre sí.
+* **RN-021 (Persistencia - Round-trip sin pérdida):** Toda entidad guardada en PostgreSQL/MongoDB (instancia, solución, matriz de costos) debe recuperarse con los mismos datos relevantes al leerla — sin pérdida ni corrupción de campos entre `save` y `load`.
+* **RN-022 (Persistencia - Reconexión automática):** Si la conexión a PostgreSQL se cierra en caliente (reinicio del servidor de base de datos), el adaptador debe reconectar automáticamente en la siguiente operación en vez de fallar hasta que se reinicie el proceso.
 * **RN-AUTH-001 (Autenticación):** Toda llamada a los endpoints protegidos requiere un token JWT válido.
 * **RN-CAT-001 (Catálogo Aislado):** El catálogo de vehículos está estrictamente aislado por cuenta de cliente (Account).
 * **RN-CAT-002 (Validación Catálogo):** La creación de un tipo de vehículo en el catálogo requiere pesos y volúmenes estrictamente mayores a cero.

@@ -1,8 +1,6 @@
 """
 Tests para persistencia: PostgreSQL + MongoDB.
 Valida CRUD operations y transacciones.
-
-spec: PENDIENTE
 """
 
 import pytest
@@ -20,7 +18,10 @@ MONGO_AVAILABLE = os.getenv("MONGO_URL") is not None
 
 @pytest.mark.skipif(not POSTGRES_AVAILABLE, reason="PostgreSQL not configured")
 class TestPostgreSQLAdapter:
-    """Tests para PostgreSQL adapter."""
+    """Tests para PostgreSQL adapter.
+
+    spec: RN-021
+    """
 
     def test_save_and_load_instance(self):
         """Save instance to PostgreSQL and retrieve it."""
@@ -61,7 +62,10 @@ class TestPostgreSQLAdapter:
         (mantenimiento, actualización de imagen Docker) mientras el proceso
         de la API seguía vivo, self.conn quedaba con un objeto cerrado y
         CADA acción posterior fallaba con 500, aunque Postgres ya se hubiera
-        recuperado, hasta reiniciar el proceso a mano."""
+        recuperado, hasta reiniciar el proceso a mano.
+
+        spec: RN-022
+        """
         from backend_python.persistence.postgres_adapter import PostgreSQLAdapter
 
         adapter = PostgreSQLAdapter()
@@ -120,7 +124,10 @@ class TestPostgreSQLAdapter:
 
 @pytest.mark.skipif(not MONGO_AVAILABLE, reason="MongoDB not configured")
 class TestMongoDBAdapter:
-    """Tests para MongoDB adapter."""
+    """Tests para MongoDB adapter.
+
+    spec: RN-021
+    """
 
     def test_save_and_load_solution(self):
         """Save solution to MongoDB and retrieve it."""
@@ -227,7 +234,10 @@ class TestMongoDBAdapter:
     reason="PostgreSQL and MongoDB not configured"
 )
 class TestFullPersistencePipeline:
-    """End-to-end test: solve + persist to both DBs."""
+    """End-to-end test: solve + persist to both DBs.
+
+    spec: RN-021
+    """
 
     def test_solve_persist_retrieve(self):
         """Full pipeline: solve → save PostgreSQL + MongoDB → retrieve."""
