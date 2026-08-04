@@ -26,3 +26,12 @@ jobs:
 
       - name: Check SPEC traceability
         run: python scripts/check_traceability.py
+
+      # RNF-007: solo build, sin push a ningún registro — detecta si un
+      # cambio en requirements.txt/package.json/Dockerfile rompe la imagen
+      # antes de que se descubra en el momento de desplegar.
+      - name: Build backend image
+        run: docker build -f backend_python/Dockerfile -t vrp-backend .
+
+      - name: Build frontend image
+        run: docker build -t vrp-frontend frontend/
