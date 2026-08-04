@@ -5,7 +5,6 @@
 ## Lote en curso
 | ID | Ítem | Clase | Procedencia | Curadurías sobrevividas |
 |---|---|---|---|---|
-| P-05 | `test_persistence.py` marcado en cuarentena (`spec: PENDIENTE`) | `[DEUDA DE SUITE]` | `tests/unit/test_persistence.py:5` | 1 |
 
 ## Backlog ordenado
 | ID | Ítem | Clase | Procedencia | Curadurías sobrevividas |
@@ -26,3 +25,4 @@
 | Validación nativa extra en C++ `solution.hpp` | Decisión del usuario: eliminar el falso `Solution::is_valid()` (stub que siempre devolvía `true`) en vez de implementar una segunda capa de validación — la validación real de invariantes ya vive en Python (`Solucion.__post_init__`), con mensajes de error en español ya cuidados. Ver commit correspondiente. | 2026-08-02 |
 | P-03 — Tests técnicos y de integración pendientes de mapeo o en cuarentena | `TestSolverPipeline`, `TestAPIFactory` y `test_osrm_client.py` documentados como cuarentena técnica permanente; `TestFleetSizeValidation` mapeado a RN-013; `test_python_fallback_produces_feasible_solution` mapeado a RN-011/RN-005/RN-010. Ningún `spec: PENDIENTE` queda en la suite. Ver commit `fa15f78`. | 2026-08-02 |
 | P-04 — Fixtures faltantes para instancias medianas/masivas | `small_instance`/`medium_instance`/`large_instance` en `tests/conftest.py` eran placeholders huérfanos de un modelo de dominio incompatible (dos eran literalmente `return None`), sin uso real en la suite — se eliminaron en vez de completarse. Ver commit `df3b182`. | 2026-08-02 |
+| P-05 — `test_persistence.py` en cuarentena (`spec: PENDIENTE`) | Los 9 tests ya pasaban contra PostgreSQL/MongoDB reales — la cuarentena era defensiva, no encubría un fallo. Ninguno citaba una regla de SPEC formal; se propusieron y aprobaron RN-021 (round-trip sin pérdida) y RN-022 (reconexión automática) antes de destrackear. Sin cambios de código de producción. Ver commits `43c6629`, `5ed2dcd`. | 2026-08-04 |
