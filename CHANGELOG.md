@@ -249,6 +249,27 @@ Implementación del delta aprobado (`docs/delta-actual.md`, `spec_version v1.2`)
 
 ---
 
+## [0.7.25] — 2026-08-04
+
+### RN-021, RN-022 — P-05: cierre de cuarentena en `test_persistence.py`
+
+Implementación del delta aprobado (`docs/delta-actual.md`, `spec_version v1.3`): los 9 tests de `tests/unit/test_persistence.py` llevaban un `spec: PENDIENTE` a nivel de módulo desde su creación — verificado contra PostgreSQL/MongoDB reales, ya pasaban todos; la cuarentena era defensiva, no encubría un fallo real. Ninguno citaba una regla de SPEC formal, así que antes de destrackear se propusieron y aprobaron dos reglas nuevas.
+
+### 📐 Reglas nuevas
+- **RN-021 (Persistencia - Round-trip sin pérdida):** toda entidad guardada en PostgreSQL/MongoDB (instancia, solución, matriz de costos) debe recuperarse con los mismos datos relevantes al leerla — sin pérdida ni corrupción de campos entre `save` y `load`.
+- **RN-022 (Persistencia - Reconexión automática):** si la conexión a PostgreSQL se cierra en caliente, el adaptador debe reconectar automáticamente en la siguiente operación en vez de fallar hasta reiniciar el proceso.
+
+### Changed
+- `tests/unit/test_persistence.py`: quitado `spec: PENDIENTE` de módulo; `TestPostgreSQLAdapter`, `TestMongoDBAdapter` y `TestFullPersistencePipeline` citan `spec: RN-021`; `test_reconnects_when_connection_was_closed` cita además `spec: RN-022`. Sin cambios de código de producción — el comportamiento ya era correcto, solo faltaba la trazabilidad.
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 237 passed / 0 failed (sin cambio de conteo, mismos 9 tests re-anotados), `test-cpp` 1/1 passed, `traceability` 46/46 (RN-021, RN-022 agregadas y cubiertas).
+
+### Rechazado / Descartado
+- **Modificar mocks/fixtures por "cambios recientes en la arquitectura":** el delta original sugería ajustar mocks si hiciera falta — no hizo falta, los 9 tests pasaron sin ningún cambio contra la arquitectura actual (`account_id` opcional en los adaptadores, compatible con las llamadas existentes de estos tests).
+
+---
+
 ## [0.7.2] — 2026-08-02
 
 ### 🔍 Ronda 1 de auditoría por roles (ciclo nuevo, post RN-013/limpieza de deuda de suite)
