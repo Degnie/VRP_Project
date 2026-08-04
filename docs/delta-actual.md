@@ -1,7 +1,7 @@
 <delta_aprobado>
-  <resumen> Formalización de infraestructura. Se agregan RNF-004 y RNF-005 al SPEC para exigir la creación de Dockerfiles (backend y frontend) y un pipeline básico de CI (ej. GitHub Actions). </resumen>
-  <clasificacion> funcional </clasificacion>
-  <ids_nuevos> RNF-004 (Empaquetado de Aplicación), RNF-005 (Integración Continua Básica) </ids_nuevos>
+  <resumen> Abordaje del ítem P-05: Eliminar la cuarentena (`spec: PENDIENTE`) de `tests/unit/test_persistence.py`. Validar que las pruebas de conexión e integración de PostgreSQL y MongoDB pasen correctamente y ajustar los mocks/fixtures si es necesario por los cambios recientes en la arquitectura del backend. </resumen>
+  <clasificacion> técnica (deuda de suite) </clasificacion>
+  <ids_nuevos> Ninguno </ids_nuevos>
   <ids_modificados> Ninguno </ids_modificados>
   <ids_retirados> Ninguno </ids_retirados>
   <decision_adr> ninguno </decision_adr>
