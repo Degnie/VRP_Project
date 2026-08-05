@@ -56,7 +56,7 @@ export function buildInstanceRequest(params: BuildInstanceParams): BuildInstance
   // ahora lo rechaza (Instancia.__post_init__), pero conviene avisar acá
   // mismo, antes del POST /solve, en vez de esperar el 400.
   const maxCapacity = flatCapacities[0]; // ya viene ordenado de mayor a menor
-  const overCapacityClients = inCoverageClients.filter((c, i) => demands[i] > maxCapacity);
+  const overCapacityClients = inCoverageClients.filter((_, i) => demands[i] > maxCapacity);
   if (overCapacityClients.length > 0) {
     return {
       request: null,

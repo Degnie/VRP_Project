@@ -529,7 +529,7 @@ export function RepartidorView({ onLogout: onLogoutProp }: Props) {
           {instancesError && (
             <p className="error-message" role="alert">
               No se pudo cargar tus instancias asignadas: {instancesError}{" "}
-              <button type="button" className="btn-secondary" onClick={loadInstances}>
+              <button type="button" className="btn-secondary" onClick={() => loadInstances()}>
                 Reintentar
               </button>
             </p>

@@ -389,6 +389,11 @@ export function SolutionSummary({ solution, instance, contacts, onSolvedInstance
   return (
     <div className="solution-summary">
       <h2 className="section-title">Solución</h2>
+      {deliveryStatusesError && (
+        <p className="error-message" role="alert">
+          {deliveryStatusesError}
+        </p>
+      )}
       {staleRouteWarning && (
         <p className="error-message" role="alert">
           Corregiste la coordenada de un cliente — la ruta, distancia y horarios que ves abajo son los de ANTES del
