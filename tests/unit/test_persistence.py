@@ -198,6 +198,36 @@ class TestMongoDBAdapter:
         finally:
             adapter.close()
 
+    def test_save_and_load_delivery_photo(self):
+        """Save comprobante fotográfico (Base64) to MongoDB and retrieve it,
+        referenciado por (instancia_id, cliente_id).
+
+        spec: RN-025
+        """
+        from backend_python.persistence.mongodb_adapter import MongoDBAdapter
+
+        adapter = MongoDBAdapter()
+        try:
+            foto_base64 = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQAB"
+            assert adapter.save_delivery_photo("test_mongo_photo", 1, foto_base64) is True
+
+            loaded = adapter.load_delivery_photo("test_mongo_photo", 1)
+            assert loaded is not None
+            assert loaded == foto_base64
+        finally:
+            adapter.close()
+
+    def test_load_delivery_photo_returns_none_when_absent(self):
+        """spec: RN-025"""
+        from backend_python.persistence.mongodb_adapter import MongoDBAdapter
+
+        adapter = MongoDBAdapter()
+        try:
+            loaded = adapter.load_delivery_photo("test_mongo_photo_absent", 999)
+            assert loaded is None
+        finally:
+            adapter.close()
+
     def test_multiple_solutions_same_instance(self):
         """Save multiple solutions for same instance."""
         from backend_python.persistence.mongodb_adapter import MongoDBAdapter

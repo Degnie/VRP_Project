@@ -251,3 +251,112 @@ class TestVehicleCatalogAPI:
             "name": "Moto", "weight_capacity_kg": 0, "volume_capacity_m3": 0.15, "tolerance_margin": 0.9,
         }, headers=headers)
         assert updated.status_code == 422
+
+
+@pytest.mark.skipif(not POSTGRES_AVAILABLE, reason="PostgreSQL not configured")
+class TestVehicleCatalogState:
+    """spec: RN-CAT-003
+
+    Estado operativo por tipo/vehículo (activo/suspendido). Los vehículos
+    suspendidos no pueden ser asignados a nuevas instancias.
+    """
+
+    def _client(self):
+        from fastapi.testclient import TestClient
+        from backend_python.api import create_app
+        return TestClient(create_app())
+
+    def _register_owner(self, client, account_name: str):
+        email = f"owner-{uuid.uuid4().hex[:8]}@test.local"
+        response = client.post("/auth/register", json={
+            "account_name": account_name, "email": email, "password": "clave123",
+        })
+        return response.json()["access_token"], response.json()["account_id"]
+
+    def test_vehicle_type_defaults_to_active(self):
+        client = self._client()
+        token, _ = self._register_owner(client, "Flota Activa")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        created = client.post("/vehicle-catalog", json={
+            "name": "Moto", "weight_capacity_kg": 30, "volume_capacity_m3": 0.15, "tolerance_margin": 0.9,
+        }, headers=headers)
+        assert created.status_code == 201
+        assert created.json()["status"] == "activo"
+
+    def test_can_suspend_and_reactivate_vehicle_type(self):
+        client = self._client()
+        token, _ = self._register_owner(client, "Flota Suspende")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        created = client.post("/vehicle-catalog", json={
+            "name": "Camioneta", "weight_capacity_kg": 600, "volume_capacity_m3": 3.5, "tolerance_margin": 0.9,
+        }, headers=headers)
+        vehicle_id = created.json()["id"]
+
+        suspended = client.put(f"/vehicle-catalog/{vehicle_id}", json={
+            "name": "Camioneta", "weight_capacity_kg": 600, "volume_capacity_m3": 3.5,
+            "tolerance_margin": 0.9, "status": "suspendido",
+        }, headers=headers)
+        assert suspended.status_code == 200
+        assert suspended.json()["status"] == "suspendido"
+
+        reactivated = client.put(f"/vehicle-catalog/{vehicle_id}", json={
+            "name": "Camioneta", "weight_capacity_kg": 600, "volume_capacity_m3": 3.5,
+            "tolerance_margin": 0.9, "status": "activo",
+        }, headers=headers)
+        assert reactivated.status_code == 200
+        assert reactivated.json()["status"] == "activo"
+
+    def test_rejects_unknown_status_value(self):
+        client = self._client()
+        token, _ = self._register_owner(client, "Flota StatusInvalido")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        response = client.post("/vehicle-catalog", json={
+            "name": "Moto", "weight_capacity_kg": 30, "volume_capacity_m3": 0.15,
+            "tolerance_margin": 0.9, "status": "rota",
+        }, headers=headers)
+        assert response.status_code == 422
+
+
+@pytest.mark.skipif(not POSTGRES_AVAILABLE, reason="PostgreSQL not configured")
+class TestVehicleCatalogDefaultSeed:
+    """spec: RN-CAT-004
+
+    Las cuentas nuevas se inicializan automáticamente con 3 arquetipos por
+    defecto (Moto, Furgoneta, Camión), evitando que el dueño parta desde
+    cero.
+    """
+
+    def _client(self):
+        from fastapi.testclient import TestClient
+        from backend_python.api import create_app
+        return TestClient(create_app())
+
+    def test_new_account_seeds_3_default_vehicle_types(self):
+        client = self._client()
+        email = f"owner-{uuid.uuid4().hex[:8]}@test.local"
+        register = client.post("/auth/register", json={
+            "account_name": "Flota Nueva Semilla", "email": email, "password": "clave123",
+        })
+        token = register.json()["access_token"]
+
+        listed = client.get("/vehicle-catalog", headers={"Authorization": f"Bearer {token}"})
+        assert listed.status_code == 200
+        names = {t["name"] for t in listed.json()}
+        assert len(listed.json()) == 3
+        assert names == {"Moto", "Furgoneta", "Camión"}
+
+    def test_seeded_vehicle_types_have_positive_capacities(self):
+        client = self._client()
+        email = f"owner-{uuid.uuid4().hex[:8]}@test.local"
+        register = client.post("/auth/register", json={
+            "account_name": "Flota Semilla Capacidades", "email": email, "password": "clave123",
+        })
+        token = register.json()["access_token"]
+
+        listed = client.get("/vehicle-catalog", headers={"Authorization": f"Bearer {token}"})
+        for t in listed.json():
+            assert t["weight_capacity_kg"] > 0
+            assert t["volume_capacity_m3"] > 0

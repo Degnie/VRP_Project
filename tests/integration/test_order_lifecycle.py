@@ -914,6 +914,49 @@ class TestOrderLifecycle:
         assert stop["delivery_status"] == "rechazado"
         assert stop["delivery_note"] == note
 
+    def test_delivery_status_with_photo_persists_and_is_retrievable(self):
+        """spec: RN-025
+
+        La confirmación de entrega admite adjuntar una foto (Base64),
+        almacenada en MongoDB junto a la actualización del estado.
+        """
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle Foto")
+        repartidor_token, repartidor_id = self._register_repartidor(client, owner_token)
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_token, instancia_id)
+        self._assign(client, owner_token, instancia_id, {"0": repartidor_id})
+
+        foto_base64 = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQAB"
+        response = client.put(
+            f"/instances/{instancia_id}/clients/1/status",
+            json={"status": "entregado", "foto_base64": foto_base64},
+            headers={"Authorization": f"Bearer {repartidor_token}"},
+        )
+        assert response.status_code == 200
+
+        my_route = client.get(
+            f"/instances/{instancia_id}/my-route",
+            headers={"Authorization": f"Bearer {repartidor_token}"},
+        )
+        stop = next(s for s in my_route.json()["stops"] if s["client_id"] == 1)
+        assert stop["has_photo"] is True
+
+    def test_delivery_status_without_photo_is_still_accepted(self):
+        """spec: RN-025 — la foto es opcional, no debe romper el flujo
+        existente de confirmación sin foto."""
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle Sin Foto")
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_token, instancia_id)
+
+        response = client.put(
+            f"/instances/{instancia_id}/clients/1/status",
+            json={"status": "entregado"},
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        assert response.status_code == 200
+
     def test_reschedule_includes_rechazado_clients(self):
         client = self._client()
         owner_token = self._register_owner(client, "Lifecycle Reprog Rechazado")
