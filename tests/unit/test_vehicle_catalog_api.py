@@ -65,14 +65,16 @@ class TestVehicleCatalogAPI:
         headers = {"Authorization": f"Bearer {token}"}
 
         created = client.post("/vehicle-catalog", json={
-            "name": "Moto", "weight_capacity_kg": 30, "volume_capacity_m3": 0.15, "tolerance_margin": 0.9,
+            "name": "Moto Reparto", "weight_capacity_kg": 30, "volume_capacity_m3": 0.15, "tolerance_margin": 0.9,
         }, headers=headers)
         assert created.status_code == 201
 
         listed = client.get("/vehicle-catalog", headers=headers)
         assert listed.status_code == 200
-        assert len(listed.json()) == 1
-        assert listed.json()[0]["name"] == "Moto"
+        # RN-CAT-004: la cuenta ya nace con 3 arquetipos por defecto — se
+        # busca la fila creada por nombre en vez de asumir catálogo vacío.
+        created_row = next(t for t in listed.json() if t["name"] == "Moto Reparto")
+        assert created_row is not None
 
     def test_list_vehicle_catalog_respects_limit_and_offset(self):
         """Bug real (Ronda 2, ciclo nuevo, dueño): GET /vehicle-catalog no
@@ -82,18 +84,22 @@ class TestVehicleCatalogAPI:
         token, _ = self._register_owner(client, "Flota Paginada")
         headers = {"Authorization": f"Bearer {token}"}
 
-        for name in ["Moto", "Camioneta", "Camión"]:
+        for name in ["Bicicleta", "Triciclo"]:
             client.post("/vehicle-catalog", json={
                 "name": name, "weight_capacity_kg": 30, "volume_capacity_m3": 0.15, "tolerance_margin": 0.9,
             }, headers=headers)
 
+        # RN-CAT-004: 3 arquetipos sembrados al registrar + 2 creados acá = 5.
         page1 = client.get("/vehicle-catalog", params={"limit": 2}, headers=headers)
         assert page1.status_code == 200
         assert len(page1.json()) == 2
 
         page2 = client.get("/vehicle-catalog", params={"limit": 2, "offset": 2}, headers=headers)
         assert page2.status_code == 200
-        assert len(page2.json()) == 1
+        assert len(page2.json()) == 2
+
+        full = client.get("/vehicle-catalog", headers=headers)
+        assert len(full.json()) == 5
 
         assert client.get("/vehicle-catalog", params={"limit": 0}, headers=headers).status_code == 422
 
@@ -118,7 +124,7 @@ class TestVehicleCatalogAPI:
         assert created.json()["id"] == client_id
 
         listed = client.get("/vehicle-catalog", headers=headers)
-        assert listed.json()[0]["id"] == client_id
+        assert any(t["id"] == client_id for t in listed.json())
 
     def test_create_without_id_still_generates_one(self):
         client = self._client()
@@ -168,11 +174,14 @@ class TestVehicleCatalogAPI:
         token_b, _ = self._register_owner(client, "Flota C")
 
         client.post("/vehicle-catalog", json={
-            "name": "Camioneta", "weight_capacity_kg": 600, "volume_capacity_m3": 3.5, "tolerance_margin": 0.9,
+            "name": "Camioneta Reforzada", "weight_capacity_kg": 600, "volume_capacity_m3": 3.5, "tolerance_margin": 0.9,
         }, headers={"Authorization": f"Bearer {token_a}"})
 
+        # RN-CAT-004: cada cuenta nace con su propio seed de 3 arquetipos —
+        # el aislamiento se verifica en que el vehículo creado en A no
+        # aparece en B, no en que B esté vacío.
         listed_b = client.get("/vehicle-catalog", headers={"Authorization": f"Bearer {token_b}"})
-        assert listed_b.json() == []
+        assert not any(t["name"] == "Camioneta Reforzada" for t in listed_b.json())
 
     def test_repartidor_cannot_write_catalog(self):
         client = self._client()
@@ -190,12 +199,13 @@ class TestVehicleCatalogAPI:
         repartidor_token = self._register_repartidor(client, owner_token)
 
         client.post("/vehicle-catalog", json={
-            "name": "Moto", "weight_capacity_kg": 30, "volume_capacity_m3": 0.15, "tolerance_margin": 0.9,
+            "name": "Moto Reparto E", "weight_capacity_kg": 30, "volume_capacity_m3": 0.15, "tolerance_margin": 0.9,
         }, headers={"Authorization": f"Bearer {owner_token}"})
 
+        # RN-CAT-004: 3 arquetipos sembrados + 1 creado acá = 4.
         response = client.get("/vehicle-catalog", headers={"Authorization": f"Bearer {repartidor_token}"})
         assert response.status_code == 200
-        assert len(response.json()) == 1
+        assert len(response.json()) == 4
 
     def test_update_and_delete_vehicle_type(self):
         client = self._client()
@@ -203,7 +213,7 @@ class TestVehicleCatalogAPI:
         headers = {"Authorization": f"Bearer {token}"}
 
         created = client.post("/vehicle-catalog", json={
-            "name": "Moto", "weight_capacity_kg": 30, "volume_capacity_m3": 0.15, "tolerance_margin": 0.9,
+            "name": "Moto Editable", "weight_capacity_kg": 30, "volume_capacity_m3": 0.15, "tolerance_margin": 0.9,
         }, headers=headers)
         vehicle_id = created.json()["id"]
 
@@ -217,7 +227,7 @@ class TestVehicleCatalogAPI:
         assert deleted.status_code == 204
 
         listed = client.get("/vehicle-catalog", headers=headers)
-        assert listed.json() == []
+        assert not any(t["id"] == vehicle_id for t in listed.json())
 
     def test_create_rejects_non_positive_capacity(self):
         """Bug real (Ronda 35, operario): capacidad 0/negativa se persistía
@@ -229,13 +239,13 @@ class TestVehicleCatalogAPI:
 
         for bad_weight, bad_volume in [(0, 0.15), (-10, 0.15), (30, 0), (30, -1)]:
             response = client.post("/vehicle-catalog", json={
-                "name": "Moto", "weight_capacity_kg": bad_weight,
+                "name": "Moto Rechazada", "weight_capacity_kg": bad_weight,
                 "volume_capacity_m3": bad_volume, "tolerance_margin": 0.9,
             }, headers=headers)
             assert response.status_code == 422
 
         listed = client.get("/vehicle-catalog", headers=headers)
-        assert listed.json() == []
+        assert not any(t["name"] == "Moto Rechazada" for t in listed.json())
 
     def test_update_rejects_non_positive_capacity(self):
         client = self._client()

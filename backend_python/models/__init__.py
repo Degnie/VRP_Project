@@ -135,16 +135,26 @@ class Ruta:
     Invariantes:
     - secuencia no vacía
     - costo >= 0
+    - duracion_horas >= 0
+
+    duracion_horas (RN-026/RN-027): estimación de tiempo de conducción +
+    espera, calculada por el orquestador (costo en km / velocidad promedio +
+    15min por cliente) — no la calcula Ruta en sí, solo la transporta.
+    Opcional (default 0.0) para no romper construcciones existentes que no
+    la necesitan (ej. tests de modelo puro, fallback Python legacy).
     """
     vehicle_id: int
     secuencia: List[int]  # IDs de clientes
     costo: float
+    duracion_horas: float = 0.0
 
     def __post_init__(self):
         if not self.secuencia:
             raise ValueError("secuencia debe tener al menos 1 cliente")
         if self.costo < 0:
             raise ValueError("costo no puede ser negativo")
+        if self.duracion_horas < 0:
+            raise ValueError("duracion_horas no puede ser negativa")
 
 
 @dataclass(frozen=True)

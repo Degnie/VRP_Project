@@ -131,24 +131,32 @@ class TestMaxRouteDurationOrchestration:
     """
 
     def test_route_over_8h_triggers_postponement_retry(self):
-        """Una instancia con un solo vehículo y clientes muy dispersos
-        (distancia total >> 8h de conducción a 30 km/h) obliga al
-        orquestador a reintentar retirando el cliente más lejano, hasta que
-        la ruta resultante quepa en 8h."""
+        """Un cliente cercano (cabe cómodo en 8h) y uno muy lejano (por sí
+        solo ya rompe las 8h combinado con el cercano) obligan al
+        orquestador a postergar el lejano y quedarse con una ruta que sí
+        convergió bajo 8h."""
         depot = Deposito(Coordinate(0.0, 0.0), "Depot")
         # 1 solo vehículo con capacidad de sobra: la única razón para que la
         # ruta no quepa en 8h es la distancia, no la capacidad.
         flota = Flota(num_vehiculos=1, capacidad_por_vehiculo=10000)
-        # 300 km ida + 300 km vuelta a 30 km/h = 20h, muy por encima de 8h.
-        clientes = [Cliente(1, Coordinate(300.0, 0.0), 10)]
+        clientes = [
+            Cliente(1, Coordinate(50.0, 0.0), 10),   # cerca: cabe en 8h por sí solo
+            Cliente(2, Coordinate(300.0, 0.0), 10),  # lejos: rompe las 8h si va en la misma ruta
+        ]
         instance = Instancia(id="test_over_8h", deposito=depot, flota=flota, clientes=clientes)
 
         solution, _, postponed = solve_instance_with_retries(instance)
 
+        # La solución final (tras postergar el cliente lejano) debe caber en 8h.
+        instance_final = Instancia(
+            id=instance.id, deposito=depot, flota=flota,
+            clientes=[c for c in clientes if c.id not in postponed],
+        )
         assert all(
-            _route_duration_hours(ruta, instance) <= 8.0 + 1e-6
+            _route_duration_hours(ruta, instance_final) <= 8.0 + 1e-6
             for ruta in solution.rutas
         )
+        assert 2 in postponed
 
     def test_postponed_clients_are_the_farthest(self):
         """Con 2 clientes donde solo uno cabe en 8h, el orquestador debe

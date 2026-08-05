@@ -60,6 +60,15 @@ class Config:
     # Solver
     SOLVER_TIMEOUT_SECONDS = int(os.getenv("SOLVER_TIMEOUT_SECONDS", "30"))
 
+    # Orquestación VRPTW (RN-026/RN-027): velocidad promedio asumida para
+    # estimar la duración de una ruta a partir de su distancia (Ruta.costo,
+    # en km — ver docs/delta-actual.md v1.5, decisión aceptada). 30 km/h es
+    # un promedio urbano conservador; ajustable sin tocar código si a futuro
+    # se necesita por ciudad/flota.
+    VELOCIDAD_PROMEDIO_KMH = float(os.getenv("VELOCIDAD_PROMEDIO_KMH", "30"))
+    TIEMPO_ESPERA_POR_CLIENTE_MIN = float(os.getenv("TIEMPO_ESPERA_POR_CLIENTE_MIN", "15"))
+    MAX_REINTENTOS_ORQUESTACION = int(os.getenv("MAX_REINTENTOS_ORQUESTACION", "5"))
+
     # OSRM (routing sobre calles reales; fallback a euclídea si no configurado o no disponible)
     # Sin default: OSRM_URL vacío significa "no usar OSRM", no "falla en runtime".
     OSRM_URL = os.getenv("OSRM_URL", "")

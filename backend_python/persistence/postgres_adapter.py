@@ -689,6 +689,7 @@ class PostgreSQLAdapter:
     def create_vehicle_type(
         self, vehicle_id: str, account_id: str, name: str,
         weight_capacity_kg: float, volume_capacity_m3: float, tolerance_margin: float,
+        status: str = "activo",
     ) -> bool:
         if self.conn is None:
             return False
@@ -697,10 +698,10 @@ class PostgreSQLAdapter:
             cursor.execute(
                 sql.SQL("""
                     INSERT INTO vehicle_catalog
-                        (id, account_id, name, weight_capacity_kg, volume_capacity_m3, tolerance_margin)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                        (id, account_id, name, weight_capacity_kg, volume_capacity_m3, tolerance_margin, status)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """),
-                [vehicle_id, account_id, name, weight_capacity_kg, volume_capacity_m3, tolerance_margin],
+                [vehicle_id, account_id, name, weight_capacity_kg, volume_capacity_m3, tolerance_margin, status],
             )
             self.conn.commit()
             return True
@@ -719,14 +720,14 @@ class PostgreSQLAdapter:
         cursor = self.conn.cursor()
         try:
             cursor.execute(
-                "SELECT id, name, weight_capacity_kg, volume_capacity_m3, tolerance_margin "
+                "SELECT id, name, weight_capacity_kg, volume_capacity_m3, tolerance_margin, status "
                 "FROM vehicle_catalog WHERE account_id = %s ORDER BY created_at LIMIT %s OFFSET %s",
                 [account_id, limit, offset],
             )
             return [
                 {
                     "id": row[0], "name": row[1], "weight_capacity_kg": row[2],
-                    "volume_capacity_m3": row[3], "tolerance_margin": row[4],
+                    "volume_capacity_m3": row[3], "tolerance_margin": row[4], "status": row[5],
                 }
                 for row in cursor.fetchall()
             ]
@@ -739,6 +740,7 @@ class PostgreSQLAdapter:
     def update_vehicle_type(
         self, vehicle_id: str, account_id: str, name: str,
         weight_capacity_kg: float, volume_capacity_m3: float, tolerance_margin: float,
+        status: str = "activo",
     ) -> bool:
         if self.conn is None:
             return False
@@ -747,10 +749,10 @@ class PostgreSQLAdapter:
             cursor.execute(
                 sql.SQL("""
                     UPDATE vehicle_catalog SET name=%s, weight_capacity_kg=%s,
-                        volume_capacity_m3=%s, tolerance_margin=%s
+                        volume_capacity_m3=%s, tolerance_margin=%s, status=%s
                     WHERE id=%s AND account_id=%s
                 """),
-                [name, weight_capacity_kg, volume_capacity_m3, tolerance_margin, vehicle_id, account_id],
+                [name, weight_capacity_kg, volume_capacity_m3, tolerance_margin, status, vehicle_id, account_id],
             )
             updated = cursor.rowcount > 0
             self.conn.commit()
@@ -777,6 +779,121 @@ class PostgreSQLAdapter:
         except psycopg2.Error:
             self.conn.rollback()
             raise
+        finally:
+            cursor.close()
+
+    # --- Dashboard diario (RN-023) ---
+
+    @_locked
+    def get_dashboard_summary(self, account_id: str, fecha: Optional[str] = None) -> dict:
+        """Agregado del día `fecha` (YYYY-MM-DD, por created_at::date de la
+        instancia) para el dashboard del dueño: instancias creadas ese día,
+        cantidad de entregas realizadas, y vehículos activos disponibles en
+        el catálogo. La distancia total y los vehículos utilizados viven en
+        Mongo (rutas de la solución) — este método solo agrega lo que está
+        en Postgres; el caller (API) combina ambas fuentes.
+
+        fecha es opcional: si se omite, usa CURRENT_DATE del propio servidor
+        de Postgres (no la hora del proceso Python) — created_at también se
+        graba con CURRENT_TIMESTAMP del servidor, así que comparar contra su
+        propio reloj es la única forma de que "hoy" no dependa de en qué
+        huso horario corre la app.
+        """
+        if self.conn is None:
+            return {"fecha": fecha, "instancia_ids": [], "num_entregas": 0, "vehiculos_disponibles": 0}
+        cursor = self.conn.cursor()
+        try:
+            if fecha is not None:
+                fecha_resuelta = fecha
+                cursor.execute(
+                    "SELECT id FROM instancias WHERE account_id = %s AND created_at::date = %s",
+                    [account_id, fecha],
+                )
+            else:
+                cursor.execute("SELECT CURRENT_DATE")
+                fecha_resuelta = cursor.fetchone()[0].isoformat()
+                cursor.execute(
+                    "SELECT id FROM instancias WHERE account_id = %s AND created_at::date = CURRENT_DATE",
+                    [account_id],
+                )
+            instancia_ids = [row[0] for row in cursor.fetchall()]
+
+            num_entregas = 0
+            if instancia_ids:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM clientes WHERE instancia_id = ANY(%s) AND delivery_status = 'entregado'",
+                    [instancia_ids],
+                )
+                num_entregas = cursor.fetchone()[0]
+
+            cursor.execute(
+                "SELECT COUNT(*) FROM vehicle_catalog WHERE account_id = %s AND status = 'activo'",
+                [account_id],
+            )
+            vehiculos_disponibles = cursor.fetchone()[0]
+
+            return {
+                "fecha": fecha_resuelta,
+                "instancia_ids": instancia_ids,
+                "num_entregas": num_entregas,
+                "vehiculos_disponibles": vehiculos_disponibles,
+            }
+        except psycopg2.Error:
+            return {"fecha": fecha, "instancia_ids": [], "num_entregas": 0, "vehiculos_disponibles": 0}
+        finally:
+            cursor.close()
+
+    # --- Alertas repartidor -> dueño/operario (RN-024) ---
+
+    @_locked
+    def create_alert(
+        self, alert_id: str, account_id: str, instancia_id: str, cliente_id: int,
+        repartidor_user_id: str, motivo: str,
+    ) -> Optional[dict]:
+        if self.conn is None:
+            return None
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                sql.SQL("""
+                    INSERT INTO alerts (id, account_id, instancia_id, cliente_id, repartidor_user_id, motivo)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING id, instancia_id, cliente_id, motivo, resuelta, created_at
+                """),
+                [alert_id, account_id, instancia_id, cliente_id, repartidor_user_id, motivo],
+            )
+            row = cursor.fetchone()
+            self.conn.commit()
+            return {
+                "id": row[0], "instancia_id": row[1], "cliente_id": row[2],
+                "motivo": row[3], "resuelta": row[4], "created_at": row[5].isoformat(),
+            }
+        except psycopg2.Error:
+            self.conn.rollback()
+            raise
+        finally:
+            cursor.close()
+
+    @_locked
+    def list_alerts(self, account_id: str) -> List[dict]:
+        if self.conn is None:
+            return []
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT id, instancia_id, cliente_id, motivo, resuelta, created_at "
+                "FROM alerts WHERE account_id = %s ORDER BY created_at DESC",
+                [account_id],
+            )
+            return [
+                {
+                    "id": row[0], "instancia_id": row[1], "cliente_id": row[2],
+                    "motivo": row[3], "resuelta": row[4], "created_at": row[5].isoformat(),
+                }
+                for row in cursor.fetchall()
+            ]
+        except psycopg2.Error:
+            return []
         finally:
             cursor.close()
 

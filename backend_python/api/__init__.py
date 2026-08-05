@@ -185,6 +185,9 @@ class VehicleTypeRequest(BaseModel):
     weight_capacity_kg: float
     volume_capacity_m3: float
     tolerance_margin: float = 0.9
+    # RN-CAT-003: estado operativo. "activo" por defecto — un vehículo recién
+    # creado está disponible salvo que se marque lo contrario explícitamente.
+    status: str = "activo"
 
     # Bug real (Ronda 18, ciclo nuevo, dueño): Field(gt=0) sin validador
     # propio dejaba pasar el mensaje crudo de Pydantic ("Input should be
@@ -207,6 +210,13 @@ class VehicleTypeRequest(BaseModel):
             raise ValueError("La capacidad de volumen debe ser mayor a 0 m³")
         return v
 
+    @field_validator("status")
+    @classmethod
+    def _validate_status(cls, v: str) -> str:
+        if v not in ("activo", "suspendido"):
+            raise ValueError("status debe ser 'activo' o 'suspendido'")
+        return v
+
 
 class VehicleTypeOut(BaseModel):
     """Tipo de vehículo del catálogo."""
@@ -215,6 +225,7 @@ class VehicleTypeOut(BaseModel):
     weight_capacity_kg: float
     volume_capacity_m3: float
     tolerance_margin: float
+    status: str = "activo"
 
 
 class CoverageZoneRequest(BaseModel):
@@ -238,6 +249,15 @@ class CoverageZoneOut(BaseModel):
     points: List[Tuple[float, float]]
 
 
+# RN-CAT-004: (name, weight_capacity_kg, volume_capacity_m3) — mismos
+# arquetipos y capacidades que frontend/examples/flota_vehiculos.csv usa
+# como catálogo de referencia, para que el seed no invente valores nuevos.
+DEFAULT_VEHICLE_CATALOG = (
+    ("Moto", 30.0, 0.15),
+    ("Furgoneta", 600.0, 3.5),
+    ("Camión", 1500.0, 9.0),
+)
+
 DELIVERY_STATUSES = ("pendiente", "entregado", "no_encontrado", "reprogramado", "rechazado")
 
 # "reprogramado" solo debe llegar a través de POST /instances/{id}/reschedule (que
@@ -252,6 +272,9 @@ class DeliveryStatusRequest(BaseModel):
     """Request para actualizar el estado de entrega de un cliente."""
     status: str
     note: Optional[str] = None
+    # RN-025: comprobante fotográfico opcional (Base64), guardado en MongoDB
+    # junto a la actualización del estado.
+    foto_base64: Optional[str] = None
 
 
 class UpdateClientRequest(BaseModel):
@@ -320,6 +343,10 @@ class RouteStop(BaseModel):
     customer_name: Optional[str] = None
     customer_phone: Optional[str] = None
     address: Optional[str] = None
+    # RN-025: indica si hay comprobante fotográfico guardado — no se manda el
+    # Base64 completo acá (my-route lista TODAS las paradas, sería pesado);
+    # la foto en sí se consulta aparte si hace falta mostrarla.
+    has_photo: bool = False
 
 
 class MyRouteResponse(BaseModel):
@@ -327,6 +354,24 @@ class MyRouteResponse(BaseModel):
     instancia_id: str
     vehicle_id: int
     stops: List[RouteStop]
+
+
+class AlertRequest(BaseModel):
+    """Request del repartidor para notificar al dueño/operador sobre un
+    problema con un pedido específico (RN-024)."""
+    instancia_id: str
+    cliente_id: int
+    motivo: str = Field(max_length=500)
+
+
+class AlertOut(BaseModel):
+    """Alerta creada por un repartidor, vista por dueño/operario."""
+    id: str
+    instancia_id: str
+    cliente_id: int
+    motivo: str
+    resuelta: bool
+    created_at: str
 
 
 class RescheduleResponse(BaseModel):
@@ -404,6 +449,19 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.error(f"Register error: {e}")
             raise HTTPException(status_code=500, detail="Error interno del servidor")
+
+        # RN-CAT-004: cuentas nuevas nacen con 3 arquetipos por defecto, para
+        # que el dueño no tenga que armar el catálogo desde cero antes de
+        # poder resolver su primera instancia. Falla silenciosa (log, sin
+        # abortar el registro): el catálogo se puede completar a mano después,
+        # pero una cuenta sin usuario por un error de seeding sí sería grave.
+        try:
+            for name, weight_kg, volume_m3 in DEFAULT_VEHICLE_CATALOG:
+                pg_adapter.create_vehicle_type(
+                    str(uuid.uuid4()), account_id, name, weight_kg, volume_m3, 0.9,
+                )
+        except Exception as e:
+            logger.warning(f"Default vehicle catalog seeding failed for {account_id}: {e}")
 
         token = create_access_token(user_id, account_id, "dueño")
         return TokenResponse(access_token=token, role="dueño", account_id=account_id)
@@ -547,6 +605,7 @@ def create_app() -> FastAPI:
             pg_adapter.create_vehicle_type(
                 vehicle_id, current_user.account_id, request.name,
                 request.weight_capacity_kg, request.volume_capacity_m3, request.tolerance_margin,
+                request.status,
             )
         except psycopg2.errors.UniqueViolation:
             # El id es opcional y lo genera el cliente (crypto.randomUUID())
@@ -573,6 +632,7 @@ def create_app() -> FastAPI:
             updated = pg_adapter.update_vehicle_type(
                 vehicle_id, current_user.account_id, request.name,
                 request.weight_capacity_kg, request.volume_capacity_m3, request.tolerance_margin,
+                request.status,
             )
         except Exception as e:
             logger.error(f"Update vehicle type error: {e}")
@@ -596,6 +656,67 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail="Error interno del servidor")
         if not deleted:
             raise HTTPException(status_code=404, detail="Tipo de vehículo no encontrado")
+
+    @app.get("/dashboard")
+    def get_dashboard(
+        date: Optional[str] = None,
+        current_user: CurrentUser = Depends(require_role("dueño", "operario")),
+    ):
+        """Panel agregado por fecha: distancia recorrida, entregas realizadas,
+        vehículos utilizados y vehículos disponibles (RN-023). `date` en
+        formato YYYY-MM-DD; por defecto, el día de hoy."""
+        if not pg_adapter:
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
+        # Si `date` no viene, get_dashboard_summary resuelve "hoy" con
+        # CURRENT_DATE del propio servidor de Postgres — created_at también
+        # se graba con CURRENT_TIMESTAMP del servidor, así que comparar
+        # contra su propio reloj es la única forma de que "hoy" no dependa
+        # de en qué huso horario corre el proceso de la API.
+        summary = pg_adapter.get_dashboard_summary(current_user.account_id, date)
+
+        distancia_total = 0.0
+        vehiculos_utilizados = 0
+        if mongo_adapter:
+            for namespaced_id in summary["instancia_ids"]:
+                solution = mongo_adapter.load_solution(namespaced_id)
+                if solution:
+                    distancia_total += sum(r.costo for r in solution.rutas)
+                    vehiculos_utilizados += len(solution.rutas)
+
+        return {
+            "fecha": summary["fecha"],
+            "distancia_total": distancia_total,
+            "num_entregas": summary["num_entregas"],
+            "vehiculos_utilizados": vehiculos_utilizados,
+            "vehiculos_disponibles": summary["vehiculos_disponibles"],
+        }
+
+    @app.post("/alerts", response_model=AlertOut, status_code=201)
+    def create_alert(
+        request: AlertRequest,
+        current_user: CurrentUser = Depends(require_role("repartidor")),
+    ):
+        """El repartidor notifica al dueño/operador sobre un problema con un
+        pedido específico (ej. "No encuentro la dirección")."""
+        if not pg_adapter:
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
+        alert_id = str(uuid.uuid4())
+        alert = pg_adapter.create_alert(
+            alert_id, current_user.account_id, request.instancia_id,
+            request.cliente_id, current_user.user_id, request.motivo,
+        )
+        if not alert:
+            raise HTTPException(status_code=500, detail="Error interno del servidor")
+        return AlertOut(**alert)
+
+    @app.get("/alerts", response_model=List[AlertOut])
+    def list_alerts(current_user: CurrentUser = Depends(require_role("dueño", "operario"))):
+        """Alertas de la cuenta del usuario autenticado, creadas por
+        repartidores en la calle."""
+        if not pg_adapter:
+            raise HTTPException(status_code=503, detail="PostgreSQL no disponible")
+        alerts = pg_adapter.list_alerts(current_user.account_id)
+        return [AlertOut(**a) for a in alerts]
 
     @app.get("/coverage-zone", response_model=Optional[CoverageZoneOut])
     def get_coverage_zone_endpoint(current_user: CurrentUser = Depends(get_current_user)):
@@ -1071,6 +1192,10 @@ def create_app() -> FastAPI:
         )
         if not updated:
             raise HTTPException(status_code=404, detail="Cliente no encontrado")
+
+        if request.foto_base64 and mongo_adapter:
+            mongo_adapter.save_delivery_photo(namespaced_id, cliente_id, request.foto_base64)
+
         return {"status": request.status, "note": request.note}
 
     @app.get("/instances/{instancia_id}/clients/{cliente_id}", response_model=ClientDetailResponse)
@@ -1403,6 +1528,7 @@ def create_app() -> FastAPI:
                 customer_name=clientes_by_id[client_id].customer_name if client_id in clientes_by_id else None,
                 customer_phone=clientes_by_id[client_id].customer_phone if client_id in clientes_by_id else None,
                 address=clientes_by_id[client_id].address if client_id in clientes_by_id else None,
+                has_photo=bool(mongo_adapter.load_delivery_photo(namespaced_id, client_id)),
             )
             for i, client_id in enumerate(ruta.secuencia)
         ]

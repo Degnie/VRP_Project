@@ -3,7 +3,7 @@ Orquestador: integra C++ core con validación Python.
 Ejecuta secuencia: construcción → optimización → validación.
 """
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 import logging
 import sys
 import os
@@ -12,7 +12,7 @@ import numpy as np
 
 # Import del modelo de dominio
 from backend_python.models import (
-    Cliente, Deposito, Flota, Instancia, Ruta, Solucion
+    Cliente, Deposito, Flota, Instancia, Ruta, Solucion, distancia_euclidiana
 )
 from backend_python.config import get_config
 from backend_python.service.osrm_client import get_osrm_matrix, OSRMError
@@ -368,6 +368,108 @@ class SolverOrchestrator:
             "alpha": alpha,
             "max_iters": max_iters
         }
+
+
+def _route_duration_hours(ruta: Ruta, instance: Instancia) -> float:
+    """Duración estimada de una ruta: tiempo de conducción (Ruta.costo, en
+    km, / VELOCIDAD_PROMEDIO_KMH) + tiempo de espera fijo por cliente
+    (TIEMPO_ESPERA_POR_CLIENTE_MIN).
+
+    RN-026/RN-027. costo se asume en km (ver docs/delta-actual.md v1.5,
+    decisión aceptada) — OSRM entrega metros que ya se convierten a km al
+    construir la matriz de costos, y en el fallback euclídeo (tests sin
+    OSRM) las coordenadas se tratan como si ya estuvieran en km.
+    """
+    config = get_config()
+    horas_conduccion = ruta.costo / config.VELOCIDAD_PROMEDIO_KMH
+    horas_espera = len(ruta.secuencia) * config.TIEMPO_ESPERA_POR_CLIENTE_MIN / 60.0
+    return horas_conduccion + horas_espera
+
+
+def _farthest_client_id(ruta: Ruta, instance: Instancia) -> int:
+    """Cliente de la ruta con mayor distancia individual al depósito —
+    candidato a postergar cuando la ruta completa excede 8h (RN-026)."""
+    depot = instance.deposito.coordenada
+    clientes_por_id = {c.id: c for c in instance.clientes}
+    return max(
+        ruta.secuencia,
+        key=lambda cid: distancia_euclidiana(depot, clientes_por_id[cid].coordenada),
+    )
+
+
+def solve_instance_with_retries(instance: Instancia) -> Tuple[Solucion, bool, List[int]]:
+    """Resuelve una instancia aplicando la orquestación VRPTW de RN-026/
+    RN-027: si alguna ruta excede 8h, poster­ga el cliente más lejano de esa
+    ruta y reintenta; si alguna ruta toma menos de 5h con flota de sobra,
+    reduce en 1 el número de vehículos y reintenta. Máximo
+    MAX_REINTENTOS_ORQUESTACION intentos — si no converge, se queda con la
+    última solución obtenida en vez de ciclar indefinidamente.
+
+    Retorna: (Solucion, used_osrm, postponed_client_ids)
+    """
+    config = get_config()
+    current_instance = instance
+    postponed: List[int] = []
+    solution: Optional[Solucion] = None
+    used_osrm = False
+
+    for _ in range(config.MAX_REINTENTOS_ORQUESTACION):
+        solution, used_osrm = solve_instance(current_instance)
+        durations = {
+            ruta.vehicle_id: _route_duration_hours(ruta, current_instance)
+            for ruta in solution.rutas
+        }
+
+        over_8h = [r for r in solution.rutas if durations[r.vehicle_id] > 8.0]
+        if over_8h:
+            ruta = over_8h[0]
+            # Si la ruta tiene un solo cliente y ya excede 8h, no hay nada
+            # que postergar sin vaciar la ruta — caso degenerado e
+            # irresoluble por esta vía; nos quedamos con esta solución.
+            if len(ruta.secuencia) <= 1:
+                break
+            client_id = _farthest_client_id(ruta, current_instance)
+            nuevos_clientes = [c for c in current_instance.clientes if c.id != client_id]
+            postponed.append(client_id)
+            current_instance = Instancia(
+                id=current_instance.id,
+                deposito=current_instance.deposito,
+                flota=current_instance.flota,
+                clientes=nuevos_clientes,
+                created_at=current_instance.created_at,
+            )
+            continue
+
+        under_5h = any(durations[r.vehicle_id] < 5.0 for r in solution.rutas)
+        if under_5h and current_instance.flota.num_vehiculos > 1:
+            nueva_flota = Flota(
+                num_vehiculos=current_instance.flota.num_vehiculos - 1,
+                capacidad_por_vehiculo=current_instance.flota.capacidad_por_vehiculo,
+                capacidades_vehiculos=(
+                    current_instance.flota.capacidades_vehiculos[:-1]
+                    if current_instance.flota.capacidades_vehiculos
+                    else None
+                ),
+            )
+            try:
+                current_instance = Instancia(
+                    id=current_instance.id,
+                    deposito=current_instance.deposito,
+                    flota=nueva_flota,
+                    clientes=current_instance.clientes,
+                    created_at=current_instance.created_at,
+                )
+            except ValueError:
+                # Reducir la flota dejó la demanda total sin capacidad
+                # suficiente — no es un caso factible para consolidar más;
+                # nos quedamos con la última solución válida.
+                break
+            continue
+
+        # Ni sobra ni excede: converge, no hace falta reintentar.
+        break
+
+    return solution, used_osrm, postponed
 
 
 def solve_instance(instance: Instancia) -> Tuple[Solucion, bool]:

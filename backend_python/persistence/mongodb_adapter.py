@@ -31,6 +31,7 @@ class MongoDBAdapter:
     Colecciones:
     - soluciones: { _id, instancia_id, rutas[], total_cost, timestamp, metadata }
     - cost_matrices: { _id, instancia_id, n, data_binary, timestamp }
+    - delivery_photos: { _id, instancia_id, cliente_id, foto_base64, timestamp }
     """
 
     def __init__(self, connection_string: str = None):
@@ -77,6 +78,9 @@ class MongoDBAdapter:
 
         # Indexes for cost_matrices
         self.db.cost_matrices.create_index([("instancia_id", 1)], unique=True)
+
+        # Indexes for delivery_photos
+        self.db.delivery_photos.create_index([("instancia_id", 1), ("cliente_id", 1)], unique=True)
 
     def save_solution(self, solution: Solucion, metadata: Dict[str, Any] = None) -> bool:
         """
@@ -237,6 +241,58 @@ class MongoDBAdapter:
             return None
         except Exception as e:
             logger.error(f"load_cost_matrix failed for {instancia_id}: {e}")
+            return None
+
+    def save_delivery_photo(self, instancia_id: str, cliente_id: int, foto_base64: str) -> bool:
+        """
+        Persist comprobante fotográfico (Base64) de una entrega, referenciado
+        por (instancia_id, cliente_id).
+
+        spec: RN-025
+
+        Returns:
+            True if successful
+        """
+        if self.db is None:
+            return False
+
+        try:
+            doc = {
+                "_id": f"{instancia_id}_{cliente_id}_photo",
+                "instancia_id": instancia_id,
+                "cliente_id": cliente_id,
+                "foto_base64": foto_base64,
+                "timestamp": datetime.now(timezone.utc),
+            }
+            self.db.delivery_photos.replace_one(
+                {"_id": doc["_id"]},
+                doc,
+                upsert=True
+            )
+            return True
+        except Exception as e:
+            logger.error(f"save_delivery_photo failed for {instancia_id}/{cliente_id}: {e}")
+            return False
+
+    def load_delivery_photo(self, instancia_id: str, cliente_id: int) -> Optional[str]:
+        """
+        Load comprobante fotográfico (Base64) de una entrega.
+
+        spec: RN-025
+
+        Returns:
+            foto_base64 or None if not found
+        """
+        if self.db is None:
+            return None
+
+        try:
+            doc = self.db.delivery_photos.find_one({"instancia_id": instancia_id, "cliente_id": cliente_id})
+            if doc:
+                return doc["foto_base64"]
+            return None
+        except Exception as e:
+            logger.error(f"load_delivery_photo failed for {instancia_id}/{cliente_id}: {e}")
             return None
 
     def close(self):
