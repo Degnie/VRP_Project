@@ -1,4 +1,4 @@
-# ESPECIFICACIÓN VRP SOLVER (v1.4)
+# ESPECIFICACIÓN VRP SOLVER (v1.5)
 
 ## 1. Resumen del Negocio
 El sistema es un solver para el Problema de Ruteamiento de Vehículos (VRP) orientado a producción, capaz de escalar de 50 a 100k+ clientes. Optimiza rutas distribuyendo la demanda de los clientes en una flota de vehículos, minimizando el costo total (distancia) y garantizando que se respeten las restricciones de capacidad. Funciona mediante una arquitectura híbrida donde una API en Python orquesta motores de optimización de alto rendimiento escritos en C++.
@@ -53,9 +53,16 @@ El sistema es un solver para el Problema de Ruteamiento de Vehículos (VRP) orie
 * **RN-020 (UI - Orden de asignación consistente con el solver):** El texto de ayuda que describe el orden de asignación de la flota debe ordenar por capacidad efectiva (capacidad nominal × margen de tolerancia), el mismo criterio que usa `buildInstance.ts` al construir `vehicle_capacities` para el solver — no por capacidad nominal, que puede mostrar el orden invertido cuando los tipos de vehículo tienen márgenes de tolerancia distintos entre sí.
 * **RN-021 (Persistencia - Round-trip sin pérdida):** Toda entidad guardada en PostgreSQL/MongoDB (instancia, solución, matriz de costos) debe recuperarse con los mismos datos relevantes al leerla — sin pérdida ni corrupción de campos entre `save` y `load`.
 * **RN-022 (Persistencia - Reconexión automática):** Si la conexión a PostgreSQL se cierra en caliente (reinicio del servidor de base de datos), el adaptador debe reconectar automáticamente en la siguiente operación en vez de fallar hasta que se reinicie el proceso.
+* **RN-023 (UI - Dashboard Diario):** El dueño tiene acceso a un panel agregado por fecha (día de hoy u otros) que agrupa: distancia recorrida, número de entregas realizadas, vehículos utilizados y vehículos disponibles.
+* **RN-024 (UI - Botón de Ayuda):** La vista del repartidor incluye una acción ("No encuentro la dirección") que notifica al dueño/operador requiriendo soporte sobre un cliente específico.
+* **RN-025 (API - Comprobante Fotográfico):** La confirmación de una entrega requiere (opcional u obligatoriamente) la subida de una imagen, que se almacenará temporalmente en Base64 en MongoDB junto a la actualización del estado de entrega.
+* **RN-026 (Orquestación - Límite Máximo de Ruta):** El tiempo de una ruta se calcula asumiendo una velocidad promedio y 15 minutos fijos de espera por cliente. Si, tras resolver, el orquestador Python detecta que alguna ruta excede las 8 horas totales, debe descartar la solución, retirar los pedidos menos prioritarios/lejanos para reprogramarlos al día siguiente, y volver a invocar al solver con el grupo reducido.
+* **RN-027 (Orquestación - Optimización de Flota por Subutilización):** Si el orquestador Python detecta que alguna ruta resultante toma menos de 5 horas, debe descartar la solución, reducir en 1 el número de vehículos disponibles (dejándolo inactivo) y volver a invocar al solver para forzar la consolidación de la carga en los demás vehículos.
 * **RN-AUTH-001 (Autenticación):** Toda llamada a los endpoints protegidos requiere un token JWT válido.
 * **RN-CAT-001 (Catálogo Aislado):** El catálogo de vehículos está estrictamente aislado por cuenta de cliente (Account).
 * **RN-CAT-002 (Validación Catálogo):** La creación de un tipo de vehículo en el catálogo requiere pesos y volúmenes estrictamente mayores a cero.
+* **RN-CAT-003 (Estados del Vehículo):** El catálogo de vehículos incluye un estado operativo por tipo/vehículo (Activo / Suspendido por mantenimiento). Los vehículos suspendidos no pueden ser asignados a nuevas instancias.
+* **RN-CAT-004 (Catálogo Base Referencial):** Las cuentas nuevas se inicializan automáticamente con 3 arquetipos por defecto (Moto, Furgoneta, Camión) con sus capacidades predefinidas, evitando que el dueño parta desde cero.
 * **RN-COV-001 (Roles):** Un usuario con rol de Repartidor tiene permisos de lectura sobre las zonas de cobertura, pero no de escritura.
 * **RN-COV-002 (Validez de Zona de Cobertura):** El polígono de una zona de cobertura (`PUT /coverage-zone`) debe tener al menos 3 puntos, y cada punto debe cumplir el mismo rango geográfico que RN-012 (longitud entre -180 y 180, latitud entre -90 y 90). Violarla rechaza la petición con `422`.
 * **RN-COV-003 (Recálculo de cobertura ante edición de coordenadas):** El campo `inCoverage` de un cliente en el formulario de instancia debe reevaluarse contra la zona de cobertura vigente cada vez que cambian sus coordenadas X/Y — ya sea por edición manual, alta de fila nueva, o corrección post-import — no solo al importar un CSV o al redibujar el polígono.
@@ -89,3 +96,4 @@ El sistema es un solver para el Problema de Ruteamiento de Vehículos (VRP) orie
 ## 9. Fuera de Alcance
 * **Distancias sobre alternativas a OSRM:** Valhalla queda como alternativa conceptual de ruteo, pero no está implementada ni forma parte del scope actual.
 * **Simetría Euclidiana Obligatoria:** La arquitectura está diseñada para matrices de adyacencia dirigidas y asimétricas desde el C++; no se asume simetría para distancias del mundo real.
+* **Soporte VRPTW en Core C++:** El motor matemático C++ se mantiene como un solver CVRP estricto (orientado a capacidad). El control de tiempos máximos/mínimos (VRPTW / DCVRP) y la postergación de pedidos al día siguiente se manejan exclusivamente a nivel de orquestación (Python) usando reintentos heurísticos.
