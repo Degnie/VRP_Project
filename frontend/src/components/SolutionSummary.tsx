@@ -254,7 +254,7 @@ export function SolutionSummary({ solution, instance, contacts, onSolvedInstance
       setAssignments(merged);
       setExplicitlyUnassigned(new Set());
       setAssignSaved(true);
-      assignSavedTimeoutRef.current = setTimeout(() => setAssignSaved(false), 2000);
+      assignSavedTimeoutRef.current = setTimeout(() => setAssignSaved(false), 4000);
     } catch (err) {
       setAssignError((err as Error).message);
     } finally {
@@ -422,6 +422,16 @@ export function SolutionSummary({ solution, instance, contacts, onSolvedInstance
         <p className="volume-warning-message">
           El servicio de mapas no estaba disponible al resolver — esta distancia y las rutas se calcularon en línea
           recta, no sobre calles reales. Puede estar muy alejada del recorrido real.
+        </p>
+      )}
+      {solution.postponed_clients.length > 0 && (
+        <p className="volume-warning-message" role="alert">
+          {solution.postponed_clients.length === 1
+            ? "1 cliente quedó sin ruta"
+            : `${solution.postponed_clients.length} clientes quedaron sin ruta`}{" "}
+          porque ninguna asignación posible cabía dentro de las 8h máximas de un vehículo:{" "}
+          {solution.postponed_clients.map((c) => c.name || `cliente ${c.id}`).join(", ")}. Reprogramalos para
+          incluirlos en una próxima ruta.
         </p>
       )}
 
@@ -681,7 +691,11 @@ export function SolutionSummary({ solution, instance, contacts, onSolvedInstance
         <button type="button" className="btn-secondary" onClick={handleSaveAssignments} disabled={savingAssignments}>
           {savingAssignments ? "Guardando…" : "Guardar asignaciones de repartidor"}
         </button>
-        {assignSaved && <span className="stop-save-indicator stop-save-indicator--saved">✓ Guardado</span>}
+        {assignSaved && (
+          <span className="stop-save-indicator stop-save-indicator--saved" role="status">
+            ✓ Asignaciones guardadas
+          </span>
+        )}
         {assignError && (
           <p className="error-message" role="alert">
             {assignError}

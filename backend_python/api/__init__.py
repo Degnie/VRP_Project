@@ -10,7 +10,7 @@ import logging
 
 from backend_python.config import get_config
 from backend_python.models import Coordinate, Cliente, Deposito, Flota, Instancia
-from backend_python.service.solver_orchestrator import solve_instance
+from backend_python.service.solver_orchestrator import solve_instance_with_retries
 from backend_python.persistence.postgres_adapter import PostgreSQLAdapter, psycopg2
 from backend_python.persistence.mongodb_adapter import MongoDBAdapter
 from backend_python.auth import create_access_token, hash_password, verify_password
@@ -146,6 +146,10 @@ class SolutionResponse(BaseModel):
     # (afectando total_cost y la secuencia optimizada), sin que este campo
     # existiera — el número se veía idéntico a un cálculo con calles reales.
     used_osrm: bool = True
+    # RN-026: clientes que la orquestación sacó de toda ruta porque
+    # ninguna asignación posible los incluía sin superar las 8h máximas de
+    # conducción+espera del vehículo. Vacío en el caso normal.
+    postponed_clients: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class InstanceSummary(BaseModel):
@@ -796,7 +800,13 @@ def create_app() -> FastAPI:
         # no pasó nada, pero la instancia ya quedó vacía. Solo se
         # persiste si el solve realmente produjo una solución.
         logger.info(f"Solving instance {log_label}")
-        solution, used_osrm = solve_instance(instance)
+        solution, used_osrm, postponed_ids = solve_instance_with_retries(instance)
+        clientes_by_id = {c.id: c for c in instance.clientes}
+        postponed_clients = [
+            {"id": cid, "name": clientes_by_id[cid].customer_name}
+            for cid in postponed_ids
+            if cid in clientes_by_id
+        ]
 
         if pg_adapter:
             if require_existing and not pg_adapter.load_instance(instance.id, account_id=account_id):
@@ -846,6 +856,7 @@ def create_app() -> FastAPI:
             num_routes=len(solution.rutas),
             routes=routes,
             used_osrm=used_osrm,
+            postponed_clients=postponed_clients,
         )
 
     @app.post("/solve", response_model=SolutionResponse)

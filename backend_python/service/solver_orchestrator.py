@@ -370,18 +370,23 @@ class SolverOrchestrator:
         }
 
 
-def _route_duration_hours(ruta: Ruta, instance: Instancia) -> float:
-    """Duración estimada de una ruta: tiempo de conducción (Ruta.costo, en
-    km, / VELOCIDAD_PROMEDIO_KMH) + tiempo de espera fijo por cliente
-    (TIEMPO_ESPERA_POR_CLIENTE_MIN).
+def _route_duration_hours(ruta: Ruta, instance: Instancia, used_osrm: bool = False) -> float:
+    """Duración estimada de una ruta: tiempo de conducción
+    (Ruta.costo / VELOCIDAD_PROMEDIO_KMH) + tiempo de espera fijo por
+    cliente (TIEMPO_ESPERA_POR_CLIENTE_MIN).
 
-    RN-026/RN-027. costo se asume en km (ver docs/delta-actual.md v1.5,
-    decisión aceptada) — OSRM entrega metros que ya se convierten a km al
-    construir la matriz de costos, y en el fallback euclídeo (tests sin
-    OSRM) las coordenadas se tratan como si ya estuvieran en km.
+    RN-026/RN-027. Bug real: get_osrm_matrix (osrm_client.py) entrega
+    metros crudos del /table de OSRM sin ninguna conversión — dividir esos
+    metros directo por una velocidad en km/h daba duraciones ~1000x más
+    grandes que la realidad, disparando el postergado/reducción de flota
+    aunque la ruta real durara minutos (visible con 100 pedidos y 2
+    camiones: una ruta terminaba "durando" 3 días). El fallback euclídeo
+    (sin OSRM, used_osrm=False) no tiene esa conversión: las coordenadas de
+    test están calibradas por convención como si ya estuvieran en km.
     """
     config = get_config()
-    horas_conduccion = ruta.costo / config.VELOCIDAD_PROMEDIO_KMH
+    costo_km = ruta.costo / 1000.0 if used_osrm else ruta.costo
+    horas_conduccion = costo_km / config.VELOCIDAD_PROMEDIO_KMH
     horas_espera = len(ruta.secuencia) * config.TIEMPO_ESPERA_POR_CLIENTE_MIN / 60.0
     return horas_conduccion + horas_espera
 
@@ -416,7 +421,7 @@ def solve_instance_with_retries(instance: Instancia) -> Tuple[Solucion, bool, Li
     for _ in range(config.MAX_REINTENTOS_ORQUESTACION):
         solution, used_osrm = solve_instance(current_instance)
         durations = {
-            ruta.vehicle_id: _route_duration_hours(ruta, current_instance)
+            ruta.vehicle_id: _route_duration_hours(ruta, current_instance, used_osrm)
             for ruta in solution.rutas
         }
 

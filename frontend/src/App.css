@@ -1352,3 +1352,12 @@ input:focus-visible {
 .stop-save-indicator--saved {
   color: var(--color-ok);
 }
+
+.assign-actions .stop-save-indicator--saved {
+  /* El de las paradas (arriba) es 11px al lado de un botón chico por fila —
+     bien ahí. Este es la confirmación de un guardado a nivel de instancia
+     completa; a ese tamaño quedaba casi invisible al lado del botón y el
+     operario no se daba cuenta de que sí había guardado. */
+  font-size: 13px;
+  font-weight: 600;
+}

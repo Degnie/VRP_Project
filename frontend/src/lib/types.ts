@@ -31,6 +31,9 @@ export interface SolutionResponse {
   // secuencia con distancia euclídea (OSRM no disponible) — total_cost no
   // refleja distancia real de calles.
   used_osrm: boolean;
+  // RN-026: clientes que ninguna ruta pudo incluir sin superar las 8h
+  // máximas de conducción+espera — quedan pendientes de reprogramar.
+  postponed_clients: { id: number; name: string | null }[];
 }
 
 export interface InstanceSummary {
