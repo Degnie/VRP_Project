@@ -7,6 +7,45 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ---
 
+## [0.7.27] — 2026-08-04
+
+### 📐 Delta v1.5 — dashboard, notificaciones, comprobante fotográfico, orquestación VRPTW y catálogo con estados
+
+Delta grande aprobado por el usuario (`docs/delta-actual.md`, SPEC.md v1.4 → v1.5), implementado en backend completo. El frontend correspondiente (DashboardView, botón de ayuda + foto en RepartidorView, control de estado en VehicleCatalogManager) queda **pendiente para un delta separado** — decisión explícita del usuario en ETAPA 3, para no bloquear el cierre de un backend ya verificado en 264/264 tests.
+
+### 📐 Reglas nuevas
+- **RN-023 (UI - Dashboard Diario):** panel agregado por fecha (distancia recorrida, entregas realizadas, vehículos utilizados y disponibles). Backend: `GET /dashboard?date=YYYY-MM-DD`, agrupa por `created_at::date` de las instancias — "hoy" se resuelve con `CURRENT_DATE` del propio servidor de Postgres (no el reloj del proceso de la API), para no depender del huso horario de quien llama.
+- **RN-024 (UI - Botón de Ayuda):** el repartidor notifica al dueño/operador sobre un cliente específico. Notificación por **polling** (tabla `alerts` en Postgres + `POST`/`GET /alerts`), sin websockets — decisión aceptada explícitamente por el usuario para no introducir infraestructura nueva no cubierta por ningún ADR.
+- **RN-025 (API - Comprobante Fotográfico):** confirmación de entrega admite foto (Base64), guardada en una colección nueva de MongoDB (`delivery_photos`, indexada por `instancia_id` + `cliente_id`) — referenciada, no embebida en `soluciones`. `PUT /instances/{id}/clients/{id}/status` acepta `foto_base64` opcional; `GET /instances/{id}/my-route` expone `has_photo` por parada (sin mandar el Base64 completo en el listado).
+- **RN-026 (Orquestación - Límite Máximo de Ruta):** si una ruta excede 8h (distancia/`VELOCIDAD_PROMEDIO_KMH` + 15min por cliente), el orquestador descarta la solución, posterga el cliente más lejano de esa ruta y reintenta — hasta `MAX_REINTENTOS_ORQUESTACION` (5) intentos; si no converge, se queda con la última solución obtenida.
+- **RN-027 (Orquestación - Optimización de Flota por Subutilización):** si una ruta toma menos de 5h con flota de sobra, el orquestador reduce en 1 el número de vehículos activos y reintenta, para forzar la consolidación de carga — mismo techo de 5 reintentos, nunca reduce a 0 vehículos.
+- **RN-CAT-003 (Estados del Vehículo):** columna `status` (`activo`/`suspendido`) en `vehicle_catalog` — vehículos suspendidos no participan del catálogo activo (el enforcement de "no asignable a nuevas instancias" queda del lado del frontend, ya que `/solve` recibe capacidades crudas, no `vehicle_type_id`s referenciando el catálogo — mismo patrón ya documentado para RN-018/019/020).
+- **RN-CAT-004 (Catálogo Base Referencial):** cuentas nuevas se inicializan automáticamente con 3 arquetipos (Moto 30kg/0.15m³, Furgoneta 600kg/3.5m³, Camión 1500kg/9m³ — mismos valores que `frontend/examples/flota_vehiculos.csv`), en `POST /auth/register`, con fallo silencioso (log, sin abortar el registro) si el seeding falla.
+
+### ✨ Added
+- `backend_python/config.py`: `VELOCIDAD_PROMEDIO_KMH` (default 30), `TIEMPO_ESPERA_POR_CLIENTE_MIN` (default 15), `MAX_REINTENTOS_ORQUESTACION` (default 5).
+- `backend_python/models/__init__.py`: `Ruta.duracion_horas` (opcional, default 0.0, calculado por el orquestador — no autocalculado en `__post_init__`).
+- `backend_python/service/solver_orchestrator.py`: `_route_duration_hours()`, `_farthest_client_id()`, `solve_instance_with_retries()`.
+- Migraciones `0010_vehicle_catalog_state.py` (columna `status` en `vehicle_catalog`) y `0011_alerts.py` (tabla `alerts`).
+- `backend_python/persistence/mongodb_adapter.py`: `save_delivery_photo`/`load_delivery_photo`, colección `delivery_photos`.
+- `backend_python/persistence/postgres_adapter.py`: `create_alert`/`list_alerts`, `get_dashboard_summary`; `create_vehicle_type`/`update_vehicle_type`/`list_vehicle_types` extendidos con `status`.
+- `backend_python/api/__init__.py`: `POST`/`GET /alerts`, `GET /dashboard`; `VehicleTypeRequest`/`VehicleTypeOut` con `status`; `DeliveryStatusRequest.foto_base64`; `RouteStop.has_photo`; seed de catálogo por defecto en `/auth/register`.
+
+### 🐛 Fixed (durante la implementación, alcance del mismo delta)
+- **Zona horaria en RN-023:** primer intento de "hoy" usaba `datetime.now()` del proceso Python — en esta máquina (UTC-5) vs. el contenedor Postgres (UTC), esto hacía que el dashboard del día actual apareciera vacío cerca de la medianoche. Corregido para resolver "hoy" con `CURRENT_DATE` de Postgres, la misma fuente que graba `created_at`.
+- **7 tests preexistentes de `test_vehicle_catalog_api.py` rotos por RN-CAT-004:** el seed automático de 3 vehículos rompía aserciones que asumían catálogo vacío tras `register()` (`len(listed) == 1`, `== []`). Ajustados para filtrar por nombre/id creado explícitamente en vez de contar el total — decisión explícita del usuario, ya que es un cambio de comportamiento aprobado (RN-CAT-004), no un bug en los tests viejos.
+
+### Rechazado / Descartado
+- **WebSockets para RN-024:** el usuario aceptó explícitamente polling (tabla + GET) en vez de notificación push en tiempo real, para no introducir un servidor de websockets no cubierto por ningún ADR ni ítem de RNF.
+- **Campo de "día de operación" separado de `created_at` para RN-023:** el usuario aceptó agrupar por `created_at::date`, sin agregar un campo nuevo para casos donde una instancia se resuelve/entrega un día distinto al de su creación.
+- **Enforcement de RN-CAT-003 en el backend de `/solve`:** no se agregó ninguna validación de "vehículo suspendido no puede resolver" en el backend, porque `/solve` recibe `vehicle_capacities` como números crudos, sin referenciar `vehicle_type_id`s del catálogo — mismo gap ya documentado para RN-018/019/020 (la regla vive en frontend).
+- **Frontend completo del delta (DashboardView, botón de ayuda + foto en RepartidorView, control de estado en catálogo):** declarado en el alcance original de ETAPA 0, pero explícitamente diferido por el usuario a un delta separado en ETAPA 3, para cerrar el backend (ya verificado) sin bloquear en trabajo de UI pendiente.
+
+### Estado de `verify` en esta máquina
+`make verify` en verde: `test-py` 264 passed / 0 failed (235 previos + 29 nuevos/ajustados), `test-cpp` 1/1 passed, `traceability` 55/55 (7 IDs nuevos: RN-023, RN-024, RN-025, RN-026, RN-027, RN-CAT-003, RN-CAT-004).
+
+---
+
 ## [0.7.11] — 2026-08-02
 
 ### 🔍 Ronda 2 de auditoría por roles (ciclo 3, solo dueño)
