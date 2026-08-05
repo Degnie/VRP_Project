@@ -391,15 +391,68 @@ def _route_duration_hours(ruta: Ruta, instance: Instancia, used_osrm: bool = Fal
     return horas_conduccion + horas_espera
 
 
-def _farthest_client_id(ruta: Ruta, instance: Instancia) -> int:
-    """Cliente de la ruta con mayor distancia individual al depósito —
-    candidato a postergar cuando la ruta completa excede 8h (RN-026)."""
+def _clients_to_postpone_for_8h(ruta: Ruta, instance: Instancia, used_osrm: bool) -> List[int]:
+    """Clientes de `ruta` a postergar en UN solo intento para que la
+    duración estimada quepa en 8h (RN-026).
+
+    Bug real: postergar de a 1 cliente por vuelta del bucle de reintentos
+    (llamando a solve_instance completo en cada vuelta) requiere tantas
+    vueltas como clientes sobran — con instancias grandes (100+ clientes,
+    flota chica) esto agota MAX_REINTENTOS_ORQUESTACION mucho antes de
+    converger, dejando pasar rutas de decenas de horas sin ningún aviso.
+    Acá se decide de una vez, dentro del mismo intento, cuántos y cuáles
+    clientes postergar (los más lejanos al depósito primero). La
+    conducción restante se re-estima cada vez que se saca un cliente,
+    descontando la PROPORCIÓN de su distancia euclídea al depósito sobre
+    la suma total de distancias euclídeas de la ruta — una razón
+    adimensional, no una resta de valores absolutos en unidades distintas.
+
+    Bug real (versión anterior de este fix): restar "2x distancia euclídea"
+    directo del costo real de la ruta mezclaba unidades — con OSRM activo
+    ruta.costo son metros de calle real, pero distancia_euclidiana opera
+    sobre las coordenadas crudas (grados de longitud/latitud con datos
+    geográficos reales, no kilómetros). La resta apenas movía el costo
+    restante y el bucle terminaba postergando casi toda la ruta (99 de 100
+    clientes en una prueba real con Lima). Usar una proporción evita
+    depender de que ambas cantidades compartan unidad.
+
+    Sigue siendo una aproximación (no el recálculo real de ruta, eso
+    requeriría volver a llamar al solver) pero más ajustada que prorratear
+    por cantidad de paradas cuando la distribución de distancias es
+    desigual. El bucle externo vuelve a resolver con el solver tras cada
+    tanda, así que una sub/sobre-estimación puntual se corrige en la
+    vuelta siguiente.
+    """
+    # Ruta de 1 solo cliente que ya excede 8h: postergarlo la vaciaría —
+    # caso degenerado e irresoluble por esta vía, no hay nada que sacar.
+    if len(ruta.secuencia) <= 1:
+        return []
+
+    config = get_config()
     depot = instance.deposito.coordenada
     clientes_por_id = {c.id: c for c in instance.clientes}
-    return max(
-        ruta.secuencia,
-        key=lambda cid: distancia_euclidiana(depot, clientes_por_id[cid].coordenada),
-    )
+    costo_km_restante = ruta.costo / 1000.0 if used_osrm else ruta.costo
+
+    distancias_euclid = {
+        cid: distancia_euclidiana(depot, clientes_por_id[cid].coordenada) for cid in ruta.secuencia
+    }
+    suma_euclid_restante = sum(distancias_euclid.values())
+    restantes = sorted(ruta.secuencia, key=lambda cid: distancias_euclid[cid])
+
+    a_postergar: List[int] = []
+    while len(restantes) > 1:
+        horas_conduccion = costo_km_restante / config.VELOCIDAD_PROMEDIO_KMH
+        horas_espera = len(restantes) * config.TIEMPO_ESPERA_POR_CLIENTE_MIN / 60.0
+        if horas_conduccion + horas_espera <= 8.0:
+            break
+        # El más lejano queda al final de `restantes` (orden ascendente).
+        client_id = restantes.pop()
+        if suma_euclid_restante > 0:
+            proporcion = distancias_euclid[client_id] / suma_euclid_restante
+            costo_km_restante = max(0.0, costo_km_restante * (1 - proporcion))
+        suma_euclid_restante -= distancias_euclid[client_id]
+        a_postergar.append(client_id)
+    return a_postergar
 
 
 def solve_instance_with_retries(instance: Instancia) -> Tuple[Solucion, bool, List[int]]:
@@ -427,15 +480,26 @@ def solve_instance_with_retries(instance: Instancia) -> Tuple[Solucion, bool, Li
 
         over_8h = [r for r in solution.rutas if durations[r.vehicle_id] > 8.0]
         if over_8h:
-            ruta = over_8h[0]
-            # Si la ruta tiene un solo cliente y ya excede 8h, no hay nada
-            # que postergar sin vaciar la ruta — caso degenerado e
-            # irresoluble por esta vía; nos quedamos con esta solución.
-            if len(ruta.secuencia) <= 1:
+            # Postergar TODOS los clientes que sobran de TODAS las rutas
+            # que exceden 8h en este mismo intento (no solo 1 cliente de 1
+            # ruta) — con instancias grandes, postergar de a 1 por vuelta
+            # agotaba MAX_REINTENTOS_ORQUESTACION mucho antes de bajar lo
+            # suficiente, dejando pasar rutas de decenas de horas sin
+            # converger ni avisar (ver _clients_to_postpone_for_8h).
+            client_ids_a_postergar: set = set()
+            for ruta in over_8h:
+                client_ids_a_postergar.update(
+                    _clients_to_postpone_for_8h(ruta, current_instance, used_osrm)
+                )
+            if not client_ids_a_postergar:
+                # Ninguna ruta sobre 8h tiene nada postergable (todas de 1
+                # solo cliente ya inviable) — caso degenerado e irresoluble
+                # por esta vía; nos quedamos con esta solución.
                 break
-            client_id = _farthest_client_id(ruta, current_instance)
-            nuevos_clientes = [c for c in current_instance.clientes if c.id != client_id]
-            postponed.append(client_id)
+            nuevos_clientes = [
+                c for c in current_instance.clientes if c.id not in client_ids_a_postergar
+            ]
+            postponed.extend(client_ids_a_postergar)
             current_instance = Instancia(
                 id=current_instance.id,
                 deposito=current_instance.deposito,
