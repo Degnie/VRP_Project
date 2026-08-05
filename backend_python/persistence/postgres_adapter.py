@@ -306,7 +306,10 @@ class PostgreSQLAdapter:
                 Cliente(
                     int(row[0]), Coordinate(row[2], row[3]), float(row[1]),
                     customer_name=row[4], customer_phone=row[5], address=row[6],
-                    updated_at=row[7].isoformat() if row[7] else None,
+                    # RN-015: mismo bug que created_at más abajo — TIMESTAMP
+                    # naive de Postgres sin sufijo "Z" es ambiguo para el
+                    # frontend (Date lo toma como hora local del navegador).
+                    updated_at=(row[7].isoformat() + "Z") if row[7] else None,
                 )
                 for row in clientes_rows
             ]
@@ -864,9 +867,10 @@ class PostgreSQLAdapter:
             )
             row = cursor.fetchone()
             self.conn.commit()
+            # RN-015: sufijo "Z" explícito — mismo bug que Cliente.updated_at.
             return {
                 "id": row[0], "instancia_id": row[1], "cliente_id": row[2],
-                "motivo": row[3], "resuelta": row[4], "created_at": row[5].isoformat(),
+                "motivo": row[3], "resuelta": row[4], "created_at": row[5].isoformat() + "Z",
             }
         except psycopg2.Error:
             self.conn.rollback()
@@ -888,7 +892,7 @@ class PostgreSQLAdapter:
             return [
                 {
                     "id": row[0], "instancia_id": row[1], "cliente_id": row[2],
-                    "motivo": row[3], "resuelta": row[4], "created_at": row[5].isoformat(),
+                    "motivo": row[3], "resuelta": row[4], "created_at": row[5].isoformat() + "Z",
                 }
                 for row in cursor.fetchall()
             ]
