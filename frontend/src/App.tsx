@@ -22,6 +22,7 @@ const InstanceForm = lazy(() => import("./components/InstanceForm").then((m) => 
 const SolutionSummary = lazy(() => import("./components/SolutionSummary").then((m) => ({ default: m.SolutionSummary })));
 const CoverageZoneEditor = lazy(() => import("./components/CoverageZoneEditor").then((m) => ({ default: m.CoverageZoneEditor })));
 const TeamManagement = lazy(() => import("./components/TeamManagement").then((m) => ({ default: m.TeamManagement })));
+const DashboardView = lazy(() => import("./components/DashboardView").then((m) => ({ default: m.DashboardView })));
 
 const INSTANCE_STORAGE_KEY = "vrp:last-instance";
 const SOLUTION_STORAGE_KEY = "vrp:last-solution";
@@ -36,6 +37,7 @@ function App() {
   const [coveragePoints, setCoveragePoints] = useState<[number, number][]>([]);
   const [pendingContacts, setPendingContacts] = useState<ClientGroup[] | null>(null);
   const [showTeamManagement, setShowTeamManagement] = useState(false);
+  const [showDashboard, setShowDashboard] = useState(false);
   const [overwriteConfirm, setOverwriteConfirm] = useState<{ request: InstanceRequest; clients: ClientGroup[] } | null>(null);
   const [coverageSyncError, setCoverageSyncError] = useState<string | null>(null);
   const [persistWarning, setPersistWarning] = useState<string | null>(null);
@@ -208,13 +210,30 @@ function App() {
       <header className="app-header">
         <h1>VRP Solver</h1>
         <div className="app-header-actions">
-          {(instance || solution) && !showTeamManagement && (
+          {(instance || solution) && !showTeamManagement && !showDashboard && (
             <button type="button" className="btn-reset" onClick={handleReset}>
               Limpiar instancia
             </button>
           )}
-          <button type="button" className="btn-reset" onClick={() => setShowTeamManagement((v) => !v)}>
+          <button
+            type="button"
+            className="btn-reset"
+            onClick={() => {
+              setShowDashboard(false);
+              setShowTeamManagement((v) => !v);
+            }}
+          >
             {showTeamManagement ? "Volver a rutas" : "Gestionar equipo"}
+          </button>
+          <button
+            type="button"
+            className="btn-reset"
+            onClick={() => {
+              setShowTeamManagement(false);
+              setShowDashboard((v) => !v);
+            }}
+          >
+            {showDashboard ? "Volver a rutas" : "Dashboard"}
           </button>
           <button type="button" className="btn-reset" onClick={handleLogout}>
             Cerrar sesión
@@ -226,6 +245,10 @@ function App() {
       {showTeamManagement ? (
         <div className="app-body">
           <TeamManagement onClose={() => setShowTeamManagement(false)} currentUserRole={session.role} />
+        </div>
+      ) : showDashboard ? (
+        <div className="app-body">
+          <DashboardView onClose={() => setShowDashboard(false)} />
         </div>
       ) : (
         <div className="app-body">

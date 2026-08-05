@@ -89,6 +89,17 @@ export function RepartidorView({ onLogout: onLogoutProp }: Props) {
   // ningún feedback visual, generando dudas y toques repetidos innecesarios.
   const [savingStopIds, setSavingStopIds] = useState<Set<number>>(new Set());
   const [savedStopIds, setSavedStopIds] = useState<Set<number>>(new Set());
+  // RN-024: "No encuentro la dirección" — mismo patrón de feedback
+  // (enviando/enviado) que savingStopIds/savedStopIds, en Sets separados
+  // porque son acciones independientes sobre la misma parada.
+  const [sendingAlertIds, setSendingAlertIds] = useState<Set<number>>(new Set());
+  const [sentAlertIds, setSentAlertIds] = useState<Set<number>>(new Set());
+  // RN-025: comprobante fotográfico — se agrega DESPUÉS de marcar "entregado"
+  // (no bloquea el toque único existente de ese botón), vía un input de
+  // archivo oculto por parada, disparado por un botón visible.
+  const [uploadingPhotoIds, setUploadingPhotoIds] = useState<Set<number>>(new Set());
+  const [photoUploadedIds, setPhotoUploadedIds] = useState<Set<number>>(new Set());
+  const photoInputRefs = useRef<Map<number, HTMLInputElement>>(new Map());
   const [pendingChange, setPendingChange] = useState<
     { instanciaId: string; clientId: number; status: DeliveryStatus } | null
   >(() => {
@@ -361,6 +372,81 @@ export function RepartidorView({ onLogout: onLogoutProp }: Props) {
     }
   };
 
+  // RN-024: notifica al dueño/operador sobre un problema puntual con este
+  // pedido — no cambia el estado de entrega, es independiente del flujo de
+  // applyStatusChange/handleStatusChange de arriba.
+  const handleHelpAlert = async (clientId: number) => {
+    if (!route) return;
+    setSendingAlertIds((prev) => new Set(prev).add(clientId));
+    setError(null);
+    try {
+      await api.createAlert({
+        instancia_id: route.instancia_id,
+        cliente_id: clientId,
+        motivo: "No encuentro la dirección",
+      });
+      setSentAlertIds((prev) => new Set(prev).add(clientId));
+      setTimeout(
+        () =>
+          setSentAlertIds((prev) => {
+            const next = new Set(prev);
+            next.delete(clientId);
+            return next;
+          }),
+        3000
+      );
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSendingAlertIds((prev) => {
+        const next = new Set(prev);
+        next.delete(clientId);
+        return next;
+      });
+    }
+  };
+
+  // RN-025: sube el comprobante fotográfico de una parada ya entregada —
+  // reenvía el mismo status ("entregado") junto con el Base64, sin tocar la
+  // nota existente (no aplica a este estado, ver NOTE_PROMPT_STATUSES).
+  const handlePhotoSelected = async (clientId: number, file: File) => {
+    if (!route) return;
+    setUploadingPhotoIds((prev) => new Set(prev).add(clientId));
+    setError(null);
+    try {
+      const fotoBase64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(new Error("No se pudo leer la foto — probá de nuevo."));
+        reader.readAsDataURL(file);
+      });
+      await api.updateDeliveryStatus(route.instancia_id, clientId, "entregado", undefined, fotoBase64);
+      setRoute((prev) =>
+        prev
+          ? { ...prev, stops: prev.stops.map((s) => (s.client_id === clientId ? { ...s, has_photo: true } : s)) }
+          : prev
+      );
+      setPhotoUploadedIds((prev) => new Set(prev).add(clientId));
+      setTimeout(
+        () =>
+          setPhotoUploadedIds((prev) => {
+            const next = new Set(prev);
+            next.delete(clientId);
+            return next;
+          }),
+        1500
+      );
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setUploadingPhotoIds((prev) => {
+        const next = new Set(prev);
+        next.delete(clientId);
+        return next;
+      });
+    }
+  };
+
   const handleStatusChange = (clientId: number, status: DeliveryStatus) => {
     if (!route) return;
     const stop = route.stops.find((s) => s.client_id === clientId);
@@ -580,6 +666,53 @@ export function RepartidorView({ onLogout: onLogoutProp }: Props) {
                     )}
                     {savedStopIds.has(stop.client_id) && (
                       <span className="stop-save-indicator stop-save-indicator--saved" role="status" aria-live="polite">✓ Guardado</span>
+                    )}
+                    <button
+                      type="button"
+                      className="repartidor-help-btn"
+                      disabled={sendingAlertIds.has(stop.client_id)}
+                      onClick={() => handleHelpAlert(stop.client_id)}
+                    >
+                      🆘 No encuentro la dirección
+                    </button>
+                    {sendingAlertIds.has(stop.client_id) && (
+                      <span className="stop-save-indicator" role="status" aria-live="polite">Enviando…</span>
+                    )}
+                    {sentAlertIds.has(stop.client_id) && (
+                      <span className="stop-save-indicator stop-save-indicator--saved" role="status" aria-live="polite">✓ Avisado</span>
+                    )}
+                    {stop.delivery_status === "entregado" && (
+                      <>
+                        <input
+                          ref={(el) => {
+                            if (el) photoInputRefs.current.set(stop.client_id, el);
+                            else photoInputRefs.current.delete(stop.client_id);
+                          }}
+                          type="file"
+                          accept="image/*"
+                          capture="environment"
+                          className="repartidor-photo-input"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) handlePhotoSelected(stop.client_id, file);
+                            e.target.value = "";
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="repartidor-photo-btn"
+                          disabled={uploadingPhotoIds.has(stop.client_id)}
+                          onClick={() => photoInputRefs.current.get(stop.client_id)?.click()}
+                        >
+                          {stop.has_photo ? "📷 Cambiar foto" : "📷 Agregar foto"}
+                        </button>
+                        {uploadingPhotoIds.has(stop.client_id) && (
+                          <span className="stop-save-indicator" role="status" aria-live="polite">Subiendo…</span>
+                        )}
+                        {photoUploadedIds.has(stop.client_id) && (
+                          <span className="stop-save-indicator stop-save-indicator--saved" role="status" aria-live="polite">✓ Foto guardada</span>
+                        )}
+                      </>
                     )}
                   </div>
                 </li>

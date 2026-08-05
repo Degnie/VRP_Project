@@ -1,6 +1,9 @@
 import type {
+  Alert,
+  AlertRequest,
   ClientDetail,
   CoveragePolygon,
+  DashboardSummary,
   DeliveryStatus,
   HealthStatus,
   InstanceRequest,
@@ -190,10 +193,16 @@ export const api = {
   deleteCoverageZone: () => request<void>("/coverage-zone", { method: "DELETE" }),
 
   // --- Ciclo de vida de pedido ---
-  updateDeliveryStatus: (instanciaId: string, clienteId: number, status: DeliveryStatus, note?: string) =>
+  updateDeliveryStatus: (
+    instanciaId: string,
+    clienteId: number,
+    status: DeliveryStatus,
+    note?: string,
+    fotoBase64?: string
+  ) =>
     request<{ status: DeliveryStatus; note?: string }>(
       `/instances/${encodeURIComponent(instanciaId)}/clients/${clienteId}/status`,
-      { method: "PUT", body: JSON.stringify({ status, note }) }
+      { method: "PUT", body: JSON.stringify({ status, note, foto_base64: fotoBase64 }) }
     ),
   setAssignments: (instanciaId: string, assignments: Record<number, string>) =>
     request<{ assignments: Record<number, string> }>(
@@ -221,4 +230,11 @@ export const api = {
     ),
   deleteInstance: (instanciaId: string) =>
     request<{ deleted: boolean }>(`/instances/${encodeURIComponent(instanciaId)}`, { method: "DELETE" }),
+
+  // --- Dashboard diario ---
+  getDashboard: (date?: string) => request<DashboardSummary>(`/dashboard${date ? `?date=${date}` : ""}`),
+
+  // --- Alertas repartidor -> dueño/operario ---
+  createAlert: (body: AlertRequest) => request<Alert>("/alerts", { method: "POST", body: JSON.stringify(body) }),
+  listAlerts: () => request<Alert[]>("/alerts"),
 };

@@ -68,6 +68,12 @@
 .app-sidebar {
   width: 360px;
   flex-shrink: 0;
+  /* Un flex item mide su altura mínima como "auto" (tamaño de su contenido)
+     por defecto, no 0 — sin min-height:0 una lista larga (import de cientos
+     de clientes) hacía crecer el sidebar por encima de .app-shell en vez de
+     recortarse a overflow-y:auto, y era el body/documento el que terminaba
+     scrolleando hasta debajo del mapa en vez del sidebar scrolleando solo. */
+  min-height: 0;
   overflow-y: auto;
   /* Sin esto, un overflow-y:auto con overflow-x implícito "visible" se computa
      como auto en ambos ejes (regla CSS) — el sidebar entero se volvía
@@ -846,11 +852,11 @@ input:focus-visible {
 .vehicle-table-head,
 .vehicle-table-row {
   display: grid;
-  grid-template-columns: minmax(90px, 1.4fr) minmax(64px, 0.8fr) minmax(72px, 0.8fr) minmax(64px, 0.7fr) auto;
+  grid-template-columns: minmax(90px, 1.4fr) minmax(64px, 0.8fr) minmax(72px, 0.8fr) minmax(64px, 0.7fr) minmax(88px, 0.9fr) auto;
   gap: var(--space-1);
   align-items: center;
   margin-bottom: var(--space-2);
-  min-width: 380px;
+  min-width: 460px;
 }
 
 .vehicle-table-head span {
@@ -861,10 +867,16 @@ input:focus-visible {
   letter-spacing: 0.04em;
 }
 
-.vehicle-table-row input {
+.vehicle-table-row input,
+.vehicle-table-row select {
   min-height: 40px;
   padding: var(--space-1) var(--space-2);
   font-size: 13px;
+}
+
+.vehicle-status-suspendido {
+  color: var(--color-error);
+  border-color: var(--color-error);
 }
 
 .input-needs-name,
@@ -918,6 +930,16 @@ input:focus-visible {
   font-size: 13px;
 }
 
+.fleet-demand-hint {
+  margin: 0 0 var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-control);
+  background: var(--color-beacon-bg);
+  font-size: 12px;
+  color: var(--color-ink-soft);
+  font-weight: 600;
+}
+
 .fleet-summary {
   margin-top: var(--space-2);
   padding: var(--space-2) var(--space-3);
@@ -962,6 +984,16 @@ input:focus-visible {
 @media (max-width: 768px) {
   .app-body {
     flex-direction: column;
+  }
+
+  .app-main {
+    /* Sin esto, un hijo flex en columna no se encoge por debajo de su
+       contenido intrínseco: con el sidebar ya fijo a max-height:55svh de
+       abajo, el mapa (flex:1) se salía del viewport en vez de ocupar el
+       resto de la pantalla, y el body entero pasaba a scrollear en lugar de
+       quedar contenido — el usuario terminaba viendo una franja vacía tras
+       scrollear más allá de la lista de clientes larga. */
+    min-height: 0;
   }
 
   .app-sidebar {
@@ -1133,11 +1165,68 @@ input:focus-visible {
   border-color: var(--color-ink);
 }
 
+/* RN-024/RN-025: ayuda y foto por parada — mismo tamaño táctil y borde que
+   .repartidor-status-btn, sin el estilo "activo" (no son un estado de
+   entrega, son acciones independientes). */
+.repartidor-help-btn,
+.repartidor-photo-btn {
+  min-height: 44px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.repartidor-photo-input {
+  /* Oculto: se dispara vía photoInputRefs.current.get(id)?.click() desde
+     .repartidor-photo-btn — un <input type="file"> nativo no se puede
+     estilar directamente sin perder el picker nativo de cámara/galería. */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
 @media (min-width: 640px) {
   .repartidor-body {
     max-width: 480px;
     margin: 0 auto;
   }
+}
+
+/* ---- dashboard diario (RN-023) ---- */
+
+.dashboard-view {
+  width: 100%;
+  padding: var(--space-6);
+  overflow-y: auto;
+}
+
+.dashboard-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.dashboard-date-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.dashboard-date-field label {
+  font-size: 12px;
+  color: var(--color-ink-soft);
+}
+
+.dashboard-stats {
+  flex-wrap: wrap;
 }
 
 /* ---- gestión de equipo (Etapa A) ---- */

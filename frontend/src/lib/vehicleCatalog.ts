@@ -9,6 +9,7 @@ function toDTO(t: Partial<Pick<VehicleType, "id">> & Omit<VehicleType, "id">): V
     weight_capacity_kg: t.weightCapacityKg,
     volume_capacity_m3: t.volumeCapacityM3,
     tolerance_margin: t.toleranceMargin,
+    status: t.status,
   };
 }
 
@@ -19,6 +20,7 @@ function fromDTO(dto: VehicleTypeDTO & { id: string }): VehicleType {
     weightCapacityKg: dto.weight_capacity_kg,
     volumeCapacityM3: dto.volume_capacity_m3,
     toleranceMargin: dto.tolerance_margin,
+    status: dto.status,
   };
 }
 
@@ -75,6 +77,7 @@ export interface VehicleImportRow {
   weightCapacityKg: number;
   volumeCapacityM3: number;
   toleranceMargin: number;
+  status: VehicleType["status"];
 }
 
 export interface VehicleImportResult {
@@ -123,6 +126,9 @@ function vehicleRowsFromMatrix(matrix: string[][]): VehicleImportResult {
       weightCapacityKg: weightRaw,
       volumeCapacityM3: volumeRaw > 0 ? volumeRaw : 1,
       toleranceMargin,
+      // El CSV/Excel de catálogo no trae estado — un vehículo importado
+      // nace activo, igual que uno creado a mano en el formulario.
+      status: "activo",
     });
   }
 

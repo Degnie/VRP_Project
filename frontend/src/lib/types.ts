@@ -75,6 +75,10 @@ export interface TeamMember {
   active: boolean;
 }
 
+// RN-CAT-003: estado operativo del vehículo — uno suspendido (mantenimiento)
+// no debería asignarse a una instancia nueva.
+export type VehicleStatus = "activo" | "suspendido";
+
 // --- Catálogo de vehículos (persistido en el backend, por cuenta — Etapa 1) ---
 export interface VehicleType {
   id: string;
@@ -82,6 +86,7 @@ export interface VehicleType {
   weightCapacityKg: number;
   volumeCapacityM3: number;
   toleranceMargin: number; // 0..1, ej. 0.90 = usar 90% de la capacidad nominal
+  status: VehicleStatus;
 }
 
 // Forma exacta que devuelve/espera el backend (snake_case) — se mapea a/desde
@@ -92,6 +97,7 @@ export interface VehicleTypeDTO {
   weight_capacity_kg: number;
   volume_capacity_m3: number;
   tolerance_margin: number;
+  status: VehicleStatus;
 }
 
 // Selección de flota disponible "hoy" (vive en el estado del formulario, no persiste)
@@ -170,6 +176,9 @@ export interface RouteStop {
   customer_name?: string;
   customer_phone?: string;
   address?: string;
+  // RN-025: si hay comprobante fotográfico guardado (el Base64 en sí no
+  // viaja acá — my-route lista todas las paradas de la ruta).
+  has_photo: boolean;
 }
 
 export interface MyRouteResponse {
@@ -181,6 +190,33 @@ export interface MyRouteResponse {
 export interface RescheduleResponse {
   new_instancia_id: string;
   rescheduled_client_ids: number[];
+}
+
+// --- Dashboard diario (RN-023) ---
+export interface DashboardSummary {
+  fecha: string;
+  // En metros — misma unidad cruda de OSRM/euclídea que el resto de la app
+  // ya usa (ver SolutionSummary.tsx: formatDistanceKm hace meters/1000).
+  distancia_total: number;
+  num_entregas: number;
+  vehiculos_utilizados: number;
+  vehiculos_disponibles: number;
+}
+
+// --- Alertas repartidor -> dueño/operario (RN-024) ---
+export interface AlertRequest {
+  instancia_id: string;
+  cliente_id: number;
+  motivo: string;
+}
+
+export interface Alert {
+  id: string;
+  instancia_id: string;
+  cliente_id: number;
+  motivo: string;
+  resuelta: boolean;
+  created_at: string;
 }
 
 // --- ETA estimado (calculado post-solve, no persistido) ---

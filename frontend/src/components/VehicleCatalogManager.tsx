@@ -70,6 +70,7 @@ export function VehicleCatalogManager({ vehicleTypes, onChange, onImported, sync
       prev.map((t) => {
         if (t.id !== id) return t;
         if (field === "name") return { ...t, name: value };
+        if (field === "status") return { ...t, status: value as VehicleType["status"] };
         if (field === "toleranceMargin") return { ...t, toleranceMargin: Math.min(1, Math.max(0.5, Number(value) / 100)) };
         return { ...t, [field]: Number(value) };
       })
@@ -83,7 +84,9 @@ export function VehicleCatalogManager({ vehicleTypes, onChange, onImported, sync
     // invocación creara una fila con identidad distinta, resultando en 2
     // filas nuevas por un solo click bajo StrictMode, además de robarle el
     // foco a cualquier input que estuviera recibiendo tecleo en simultáneo.
-    const newRow = createLocalVehicleType({ name: "", weightCapacityKg: 100, volumeCapacityM3: 1, toleranceMargin: 0.9 });
+    const newRow = createLocalVehicleType({
+      name: "", weightCapacityKg: 100, volumeCapacityM3: 1, toleranceMargin: 0.9, status: "activo",
+    });
     onChange((prev) => [...prev, newRow]);
   };
 
@@ -126,6 +129,7 @@ export function VehicleCatalogManager({ vehicleTypes, onChange, onImported, sync
               <span role="columnheader">Peso (kg)</span>
               <span role="columnheader">Volumen (m³)</span>
               <span role="columnheader">Margen (%)</span>
+              <span role="columnheader">Estado</span>
               <span role="columnheader" aria-hidden="true"></span>
             </div>
             {vehicleTypes.map((type) => {
@@ -172,6 +176,15 @@ export function VehicleCatalogManager({ vehicleTypes, onChange, onImported, sync
                   value={Math.round(type.toleranceMargin * 100)}
                   onChange={(e) => updateType(type.id, "toleranceMargin", e.target.value)}
                 />
+                <select
+                  aria-label={`Estado de ${type.name || "vehículo"}`}
+                  value={type.status}
+                  className={type.status === "suspendido" ? "vehicle-status-suspendido" : undefined}
+                  onChange={(e) => updateType(type.id, "status", e.target.value)}
+                >
+                  <option value="activo">Activo</option>
+                  <option value="suspendido">Suspendido</option>
+                </select>
                 <button
                   type="button"
                   className="row-remove"
