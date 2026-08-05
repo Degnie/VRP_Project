@@ -237,6 +237,10 @@ export function InstanceForm({ onSubmit, isSolving, coveragePoints }: Props) {
   // mientras el usuario todavía lo está completando.
   const namedVehicleTypes = vehicleTypes.filter((t) => t.name.trim() !== "");
   const simpleMode = namedVehicleTypes.length === 0;
+  const totalDemandKg = groups.reduce(
+    (sum, g) => sum + g.packages.reduce((s, p) => s + p.weightKg, 0),
+    0,
+  );
 
   const handleFileImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -486,7 +490,7 @@ export function InstanceForm({ onSubmit, isSolving, coveragePoints }: Props) {
       ) : (
         <>
           {fleetReducedWarning && <p className="volume-warning-message">{fleetReducedWarning}</p>}
-          <FleetSelector vehicleTypes={namedVehicleTypes} fleet={fleet} onChange={setFleet} />
+          <FleetSelector vehicleTypes={namedVehicleTypes} fleet={fleet} onChange={setFleet} totalDemandKg={totalDemandKg} />
         </>
       )}
 

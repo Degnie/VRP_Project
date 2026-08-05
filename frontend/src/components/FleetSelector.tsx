@@ -9,6 +9,7 @@ interface Props {
   vehicleTypes: VehicleType[];
   fleet: FleetSelectionEntry[];
   onChange: (fleet: FleetSelectionEntry[]) => void;
+  totalDemandKg?: number;
 }
 
 // Bug real (Ronda 8, ciclo nuevo, dueño): el solver usa esta capacidad
@@ -20,7 +21,7 @@ function effectiveWeightKg(type: VehicleType): number {
   return Math.round(type.weightCapacityKg * type.toleranceMargin);
 }
 
-export function FleetSelector({ vehicleTypes, fleet, onChange }: Props) {
+export function FleetSelector({ vehicleTypes, fleet, onChange, totalDemandKg }: Props) {
   const countFor = (typeId: string) => fleet.find((f) => f.vehicleTypeId === typeId)?.count ?? 0;
 
   const setCount = (typeId: string, count: number) => {
@@ -39,9 +40,20 @@ export function FleetSelector({ vehicleTypes, fleet, onChange }: Props) {
   // seleccionados tienen distinto margen de tolerancia entre sí.
   const order = [...selected].sort((a, b) => effectiveWeightKg(b) - effectiveWeightKg(a));
 
+  const hasDemand = typeof totalDemandKg === "number" && totalDemandKg > 0;
+  const missingKg = hasDemand ? totalDemandKg - totalWeightKg : 0;
+
   return (
     <div className="fleet-selector">
       <h2 className="section-title">Flota disponible hoy</h2>
+      {hasDemand && (
+        <p className="fleet-demand-hint">
+          Demanda total de los pedidos: {numberFormatter.format(totalDemandKg)} kg ·{" "}
+          {missingKg > 0
+            ? `faltan ${numberFormatter.format(missingKg)} kg por cubrir — la flota no alcanza`
+            : `suma cubierta, con ${numberFormatter.format(-missingKg)} kg de margen (no garantiza una ruta válida: seguí necesitando suficientes vehículos para repartir los pedidos, no solo el peso total)`}
+        </p>
+      )}
       <div className="fleet-table" role="table">
         {vehicleTypes.map((type) => (
           <div className="fleet-table-row" role="row" key={type.id}>
