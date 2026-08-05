@@ -444,7 +444,12 @@ input:focus-visible {
 }
 
 .import-input {
-  position: absolute;
+  /* Antes usaba position:absolute — dentro de .app-sidebar (overflow-y:auto)
+     el foco al hacer click en el <label> disparaba el scroll-into-view nativo
+     del navegador hacia la posición absoluta del input clippeado, corriendo
+     el sidebar entero apenas se abría el diálogo de archivo. Sin position:
+     absolute el input se queda en flujo normal (1px, sin espacio real) y no
+     hay nada a lo que hacer scroll. */
   width: 1px;
   height: 1px;
   padding: 0;
@@ -1202,6 +1207,11 @@ input:focus-visible {
 
 .dashboard-view {
   width: 100%;
+  /* Mismo bug que .app-sidebar (ver arriba): sin min-height:0 un flex item
+     mide su alto mínimo como el de su contenido, así que overflow-y:auto
+     nunca entraba en juego y era la página entera la que crecía y dejaba un
+     hueco en blanco debajo del layout. */
+  min-height: 0;
   padding: var(--space-6);
   overflow-y: auto;
 }
@@ -1233,6 +1243,7 @@ input:focus-visible {
 
 .team-management {
   width: 100%;
+  min-height: 0;
   padding: var(--space-6);
   overflow-y: auto;
 }
