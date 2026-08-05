@@ -205,18 +205,23 @@ export function InstanceForm({ onSubmit, isSolving, coveragePoints }: Props) {
     })();
   }, [vehicleTypes]);
 
-  // RN-018: si un tipo de vehículo seleccionado en la flota desaparece del
-  // catálogo (fila borrada), se saca de fleet y se avisa — en vez de dejar
-  // que buildInstance.ts la descarte en silencio al armar la solicitud.
+  // RN-018/RN-CAT-003: si un tipo de vehículo seleccionado en la flota
+  // desaparece del catálogo (fila borrada) O queda suspendido, se saca de
+  // fleet y se avisa — en vez de dejar que buildInstance.ts la descarte en
+  // silencio al armar la solicitud, o peor, la mande igual (un vehículo
+  // suspendido por mantenimiento no debe poder asignarse a una instancia
+  // nueva — antes esta pantalla no filtraba por status en ningún lado).
   useEffect(() => {
-    const currentIds = new Set(vehicleTypes.map((t) => t.id));
-    const orphaned = fleet.filter((f) => !currentIds.has(f.vehicleTypeId));
+    const selectableIds = new Set(
+      vehicleTypes.filter((t) => t.status === "activo").map((t) => t.id)
+    );
+    const orphaned = fleet.filter((f) => !selectableIds.has(f.vehicleTypeId));
     if (orphaned.length === 0) return;
-    setFleet((prev) => prev.filter((f) => currentIds.has(f.vehicleTypeId)));
+    setFleet((prev) => prev.filter((f) => selectableIds.has(f.vehicleTypeId)));
     setFleetReducedWarning(
       orphaned.length === 1
-        ? "Se quitó de la flota un tipo de vehículo que fue borrado del catálogo."
-        : `Se quitaron de la flota ${orphaned.length} tipos de vehículo que fueron borrados del catálogo.`
+        ? "Se quitó de la flota un tipo de vehículo que fue borrado del catálogo o suspendido."
+        : `Se quitaron de la flota ${orphaned.length} tipos de vehículo que fueron borrados del catálogo o suspendidos.`
     );
   }, [vehicleTypes, fleet]);
 
@@ -234,8 +239,9 @@ export function InstanceForm({ onSubmit, isSolving, coveragePoints }: Props) {
 
   // Un tipo de vehículo sin nombre todavía no cuenta como "flota real" — evita
   // que aparezca seleccionable como "(sin nombre)" en Flota disponible hoy
-  // mientras el usuario todavía lo está completando.
-  const namedVehicleTypes = vehicleTypes.filter((t) => t.name.trim() !== "");
+  // mientras el usuario todavía lo está completando. RN-CAT-003: uno
+  // suspendido tampoco es seleccionable para una instancia nueva.
+  const namedVehicleTypes = vehicleTypes.filter((t) => t.name.trim() !== "" && t.status === "activo");
   const simpleMode = namedVehicleTypes.length === 0;
   const totalDemandKg = groups.reduce(
     (sum, g) => sum + g.packages.reduce((s, p) => s + p.weightKg, 0),
