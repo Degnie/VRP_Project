@@ -7,6 +7,40 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ---
 
+## [Unreleased] — Fix: piso mínimo de flota por sector y exceso de demanda sectorial (SPEC v1.9)
+
+### 🐛 Fix sobre RN-029 (sectorización)
+
+Bugs reales reportados en uso real: (1) con flota pequeña, un sector de
+demanda baja pero > 0 podía recibir 0 vehículos por el redondeo
+proporcional puro (`math.floor`) — quedaba completamente sin ruta, sus
+clientes se descartaban en bloque (observado como "Lima Este descartado");
+(2) cuando la demanda de un sector excedía la capacidad de su sub-flota
+asignada, `Instancia.__post_init__` rechazaba con `ValueError` la
+resolución completa del sector, en vez de resolver lo que sí cabe y
+reprogramar el resto.
+
+#### RN-029 modificada
+- Todo sector con demanda > 0 recibe garantizado 1 vehículo (priorizando a
+  los de mayor demanda si la flota no alcanza para cubrir el piso de
+  todos) antes del reparto proporcional del resto.
+- Si, aun con su vehículo asignado, la demanda de un sector excede la
+  capacidad de su sub-flota, los clientes que no caben (más lejanos al
+  depósito primero, `force_include_ids` de RN-033 nunca se recortan) se
+  postergan igual que RN-026, en vez de tumbar la resolución del sector.
+
+#### Added
+- `_trim_clients_to_fleet_capacity()` en `solver_orchestrator.py`.
+- Piso de 1 vehículo por sector con demanda en `split_fleet_by_sector()`
+  (`sectorization.py`), reservado antes del reparto proporcional.
+
+#### Confirmado con el usuario
+- Si la flota total es menor a la cantidad de sectores con demanda, el/los
+  sector(es) de MENOR demanda se quedan sin flota — no se inventan
+  vehículos ni se mezclan pedidos entre sectores geográficos.
+
+---
+
 ## [Unreleased] — Auditoría Técnica y Visual Integral (Fases 1-6 + UI/UX)
 
 ### 🔍 Revisión de Arquitectura, Código y Capa Visual
