@@ -1,4 +1,4 @@
-# ESPECIFICACIÓN VRP SOLVER (v1.5)
+# ESPECIFICACIÓN VRP SOLVER (v1.6)
 
 ## 1. Resumen del Negocio
 El sistema es un solver para el Problema de Ruteamiento de Vehículos (VRP) orientado a producción, capaz de escalar de 50 a 100k+ clientes. Optimiza rutas distribuyendo la demanda de los clientes en una flota de vehículos, minimizando el costo total (distancia) y garantizando que se respeten las restricciones de capacidad. Funciona mediante una arquitectura híbrida donde una API en Python orquesta motores de optimización de alto rendimiento escritos en C++.
@@ -58,6 +58,9 @@ El sistema es un solver para el Problema de Ruteamiento de Vehículos (VRP) orie
 * **RN-025 (API - Comprobante Fotográfico):** La confirmación de una entrega requiere (opcional u obligatoriamente) la subida de una imagen, que se almacenará temporalmente en Base64 en MongoDB junto a la actualización del estado de entrega.
 * **RN-026 (Orquestación - Límite Máximo de Ruta):** El tiempo de una ruta se calcula asumiendo una velocidad promedio y 15 minutos fijos de espera por cliente. Si, tras resolver, el orquestador Python detecta que alguna ruta excede las 8 horas totales, debe descartar la solución, retirar los pedidos menos prioritarios/lejanos para reprogramarlos al día siguiente, y volver a invocar al solver con el grupo reducido.
 * **RN-027 (Orquestación - Optimización de Flota por Subutilización):** Si el orquestador Python detecta que alguna ruta resultante toma menos de 5 horas, debe descartar la solución, reducir en 1 el número de vehículos disponibles (dejándolo inactivo) y volver a invocar al solver para forzar la consolidación de la carga en los demás vehículos.
+* **RN-028 (Orquestación - Sectorización Geográfica):** Antes de resolver, los clientes de una instancia se agrupan en 4 sectores fijos de Lima Metropolitana (Lima Norte, Lima Este, Lima Sur, Lima Centro) según el polígono geográfico predefinido al que pertenece su coordenada (x, y). Un cliente cuya coordenada no cae dentro de ninguno de los 4 polígonos se asigna al sector Lima Centro (polígono de fallback).
+* **RN-029 (Orquestación - Reparto de Flota por Sector):** La flota total de la instancia (preservando la proporción de cada tipo de vehículo) se distribuye entre los 4 sectores en proporción al porcentaje de demanda total (suma de pesos) que cae en cada uno, redondeando de forma que la suma de vehículos asignados a los 4 sectores nunca exceda la flota total disponible.
+* **RN-030 (Orquestación - RN-026/027 por Sector):** La orquestación de reintentos (RN-026 límite máximo de 8h, RN-027 mínimo de 5h) se ejecuta de forma independiente para cada uno de los 4 sectores, cada uno con su propia sub-flota (RN-029) y su propia sub-lista de clientes (RN-028), en vez de sobre la instancia completa combinada.
 * **RN-AUTH-001 (Autenticación):** Toda llamada a los endpoints protegidos requiere un token JWT válido.
 * **RN-CAT-001 (Catálogo Aislado):** El catálogo de vehículos está estrictamente aislado por cuenta de cliente (Account).
 * **RN-CAT-002 (Validación Catálogo):** La creación de un tipo de vehículo en el catálogo requiere pesos y volúmenes estrictamente mayores a cero.

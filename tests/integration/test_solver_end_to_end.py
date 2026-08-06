@@ -9,7 +9,8 @@ from backend_python.models import (
     Ruta, Solucion
 )
 from backend_python.service.solver_orchestrator import (
-    SolverOrchestrator, solve_instance, solve_instance_with_retries, _route_duration_hours
+    SolverOrchestrator, solve_instance, solve_instance_with_retries,
+    solve_instance_sectorized, _route_duration_hours
 )
 
 
@@ -233,3 +234,83 @@ class TestFleetSubutilizationOrchestration:
         solution, _, _ = solve_instance_with_retries(instance)
 
         assert len(solution.rutas) == 1
+
+
+class TestSectorizedOrchestration:
+    """RN-030: la orquestación de reintentos (RN-026/RN-027) corre de forma
+    independiente por sector geográfico (RN-028/RN-029), en vez de sobre la
+    instancia completa combinada.
+
+    spec: RN-030
+    """
+
+    def test_result_covers_every_client_across_sectors(self):
+        """Clientes de sectores distintos, todos deben aparecer exactamente
+        una vez entre rutas + postergados de la solución combinada (RN-011
+        se preserva a través de la sectorización)."""
+        depot = Deposito(Coordinate(-77.0350, -12.0464), "Depot Lima")
+        flota = Flota(num_vehiculos=6, capacidad_por_vehiculo=200)
+        clientes = [
+            # Lima Norte (ver polígono en sectorization.py)
+            Cliente(1, Coordinate(-77.05, -11.90), 10),
+            Cliente(2, Coordinate(-77.03, -11.85), 10),
+            # Lima Sur
+            Cliente(3, Coordinate(-77.10, -12.30), 10),
+            Cliente(4, Coordinate(-77.08, -12.35), 10),
+        ]
+        instance = Instancia(id="test_sectorized_coverage", deposito=depot, flota=flota, clientes=clientes)
+
+        solution, _, postponed = solve_instance_sectorized(instance)
+
+        covered_ids = set()
+        for ruta in solution.rutas:
+            covered_ids.update(ruta.secuencia)
+        assert covered_ids | set(postponed) == {1, 2, 3, 4}
+        assert len(covered_ids) + len(postponed) == 4  # sin duplicados
+
+    def test_no_duplicate_vehicle_ids_across_sectors(self):
+        """Cada sector arma sus rutas con vehicle_id propio (0, 1, 2...) —
+        la combinación final no puede tener 2 rutas de sectores distintos
+        con el mismo vehicle_id, o el frontend no podría distinguirlas."""
+        depot = Deposito(Coordinate(-77.0350, -12.0464), "Depot Lima")
+        flota = Flota(num_vehiculos=4, capacidad_por_vehiculo=200)
+        clientes = [
+            Cliente(1, Coordinate(-77.05, -11.90), 10),  # Lima Norte
+            Cliente(2, Coordinate(-77.10, -12.30), 10),  # Lima Sur
+        ]
+        instance = Instancia(id="test_sectorized_no_dup_ids", deposito=depot, flota=flota, clientes=clientes)
+
+        solution, _, _ = solve_instance_sectorized(instance)
+
+        vehicle_ids = [ruta.vehicle_id for ruta in solution.rutas]
+        assert len(vehicle_ids) == len(set(vehicle_ids))
+
+    def test_sectors_converge_independently_within_8h(self):
+        """El escenario real (172 pedidos, flota heterogénea grande) debe
+        converger con cada ruta dentro de las 8h SIN necesitar postergar
+        tanto como la orquestación no sectorizada — sectores geográficamente
+        compactos son mucho más fáciles de resolver bajo 8h."""
+        import random
+
+        random.seed(11)
+        depot = Deposito(Coordinate(-77.0350, -12.0464), "Depot Lima")
+        capacidades = [1500.0] * 7 + [30.0] * 8
+        flota = Flota(num_vehiculos=15, capacidad_por_vehiculo=capacidades[0], capacidades_vehiculos=capacidades)
+        coords = [
+            (round(random.uniform(-77.15, -76.90), 5), round(random.uniform(-12.20, -11.90), 5))
+            for _ in range(172)
+        ]
+        demands = [random.randint(2, 15) for _ in range(172)]
+        clientes = [Cliente(i + 1, Coordinate(*coords[i]), demands[i]) for i in range(172)]
+        instance = Instancia(id="test_sectorized_172", deposito=depot, flota=flota, clientes=clientes)
+
+        solution, used_osrm, postponed = solve_instance_sectorized(instance)
+
+        for ruta in solution.rutas:
+            horas = _route_duration_hours(ruta, instance, used_osrm)
+            assert horas <= 8.0 + 1e-6, f"vehicle {ruta.vehicle_id}: {horas}h excede el límite"
+
+        covered_ids = set()
+        for ruta in solution.rutas:
+            covered_ids.update(ruta.secuencia)
+        assert len(covered_ids) + len(postponed) == 172
