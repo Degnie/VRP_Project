@@ -175,6 +175,44 @@ class TestInstancia:
                 clientes=clientes
             )
 
+    def test_instancia_validar_capacidad_total_false_permite_exceso(self):
+        """RN-005: /solve pasa validar_capacidad_total=False porque va a
+        sectorizar después (RN-029 decide el recorte por sector) — la
+        instancia GLOBAL puede exceder capacidad sin que Instancia()
+        rechace todo de entrada, siempre que el default (True) siga
+        aplicando para el resto de los callers.
+
+        spec: RN-005
+        """
+        depot = Deposito(Coordinate(0.0, 0.0), "Depot")
+        flota = Flota(num_vehiculos=1, capacidad_por_vehiculo=100)
+        clientes = [
+            Cliente(1, Coordinate(10.0, 10.0), 60),
+            Cliente(2, Coordinate(20.0, 20.0), 60),  # 120 > 100, pero no se valida
+        ]
+
+        instance = Instancia(
+            id="inst_over_capacity_allowed",
+            deposito=depot,
+            flota=flota,
+            clientes=clientes,
+            validar_capacidad_total=False,
+        )
+        assert len(instance.clientes) == 2
+
+    def test_instancia_validar_capacidad_total_default_sigue_estricto(self):
+        """El default (True) preserva el comportamiento existente para
+        callers que no sectorizan (reschedule, tests directos)."""
+        depot = Deposito(Coordinate(0.0, 0.0), "Depot")
+        flota = Flota(num_vehiculos=1, capacidad_por_vehiculo=100)
+        clientes = [
+            Cliente(1, Coordinate(10.0, 10.0), 60),
+            Cliente(2, Coordinate(20.0, 20.0), 60),
+        ]
+
+        with pytest.raises(ValueError, match="demanda total excede capacidad"):
+            Instancia(id="inst_still_strict", deposito=depot, flota=flota, clientes=clientes)
+
     def test_instancia_cliente_excede_vehiculo_mas_grande_aunque_total_alcance(self):
         """Bug real: demanda total (90) cabe en la flota (100), pero el
         cliente 1 (80) solo cabria repartido entre ambos vehiculos, y ningun

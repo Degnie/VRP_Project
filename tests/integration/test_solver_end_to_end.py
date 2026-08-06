@@ -341,6 +341,39 @@ class TestSectorizedOrchestration:
         assert len(postponed) >= 1  # al menos 1 no entró por falta de capacidad en Lima Norte
         assert 3 in covered_ids  # Lima Sur no se ve afectado por el exceso de Lima Norte
 
+    def test_global_demand_exceeding_total_fleet_still_generates_partial_routes(self):
+        """RN-005/RN-029: bug real reportado — si la demanda TOTAL de la
+        instancia (antes de sectorizar) excede la capacidad TOTAL de la
+        flota, Instancia() con validar_capacidad_total=True (default)
+        rechaza todo con ValueError sin generar ninguna ruta. El endpoint
+        /solve pasa validar_capacidad_total=False (porque siempre
+        sectoriza después) para que RN-029 decida el recorte por sector en
+        vez de que la instancia global explote de entrada.
+
+        spec: RN-029
+        """
+        depot = Deposito(Coordinate(-77.0350, -12.0464), "Depot Lima")
+        # 1 solo vehículo de 15kg: demanda total (30kg) excede ampliamente
+        # la capacidad total (15kg) — antes de este fix, ni siquiera se
+        # podía construir la Instancia() para pasársela a
+        # solve_instance_sectorized.
+        flota = Flota(num_vehiculos=1, capacidad_por_vehiculo=15)
+        clientes = [
+            Cliente(1, Coordinate(-77.05, -11.90), 10),  # Lima Norte
+            Cliente(2, Coordinate(-77.10, -12.30), 10),  # Lima Sur
+            Cliente(3, Coordinate(-76.80, -12.00), 10),  # Lima Este
+        ]
+        instance = Instancia(
+            id="test_global_over_capacity", deposito=depot, flota=flota, clientes=clientes,
+            validar_capacidad_total=False,
+        )
+
+        solution, _, postponed = solve_instance_sectorized(instance)
+
+        covered_ids = {cid for ruta in solution.rutas for cid in ruta.secuencia}
+        assert covered_ids | set(postponed) == {1, 2, 3}
+        assert len(covered_ids) >= 1, "ningún cliente entró en ruta — la instancia no generó nada"
+
     def test_low_demand_sector_still_gets_a_route_with_small_fleet(self):
         """RN-029: con una flota chica (4 vehículos) y 4 sectores con
         demanda desigual, el sector de menor demanda debe recibir su

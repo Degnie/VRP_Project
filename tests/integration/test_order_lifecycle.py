@@ -59,6 +59,48 @@ class TestOrderLifecycle:
             headers={"Authorization": f"Bearer {owner_token}"},
         )
 
+    def test_reused_instancia_id_with_unrelated_clients_resets_delivery_status(self):
+        """RN-036: bug real reportado — el dueño resolvía instancia-1 (ids
+        1,2 en (10,10)/(20,20)), la reprogramaba (marca delivery_status=
+        'reprogramado'), y luego volvía a resolver el MISMO instancia_id
+        con un CSV totalmente distinto (ids 1,2 pero en coordenadas nuevas,
+        sin relación con la corrida anterior). save_instance() preservaba
+        delivery_status por id numérico — el pedido NUEVO id=1 heredaba
+        'reprogramado' del pedido VIEJO id=1, mostrando "Todos los pedidos
+        de esta ruta fueron reprogramados" en una ruta recién creada.
+
+        spec: RN-036
+        """
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle Reuse ID")
+        instancia_id = f"lc-reuse-{uuid.uuid4().hex[:8]}"
+
+        self._solve_instance(client, owner_token, instancia_id)
+        client.post(f"/instances/{instancia_id}/reschedule", headers={"Authorization": f"Bearer {owner_token}"})
+
+        # Mismo instancia_id, coordenadas completamente distintas (0%
+        # solapamiento) — simula reusar el mismo ID con un CSV no relacionado.
+        solve2 = client.post(
+            "/solve",
+            json={
+                "instancia_id": instancia_id,
+                "coordinates": [(-76.5, -11.5), (-76.6, -11.6)],
+                "demands": [15, 15],
+                "num_vehicles": 1,
+                "vehicle_capacity": 100,
+                "depot_coordinates": (0, 0),
+            },
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        assert solve2.status_code == 200
+
+        statuses = client.get(
+            f"/instances/{instancia_id}/delivery-statuses", headers={"Authorization": f"Bearer {owner_token}"}
+        ).json()
+        assert all(s["status"] == "pendiente" for s in statuses.values()), (
+            f"clientes heredaron delivery_status de una corrida no relacionada: {statuses}"
+        )
+
     def test_get_assignments_returns_saved_assignments(self):
         """Bug real: el dueño asignaba un repartidor a una ruta, pero al
         recargar la página el selector volvía a mostrar "Sin asignar" porque
