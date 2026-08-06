@@ -7,6 +7,53 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ---
 
+## [Unreleased] — Fix: rechazo global de demanda excedida y contaminación de estados por reuso de instancia_id (SPEC v1.11)
+
+### 🐛 Fix sobre RN-005/RN-029 y RN-036 nueva
+
+Bugs reales reportados en uso real, probando con `clientes_lima_200/300_
+sectorizado.csv` + varias combinaciones de camiones/furgonetas.
+
+#### RN-005/RN-029: demanda global excedida rechazaba TODO sin generar rutas
+`Instancia.__post_init__` rechazaba con `ValueError` toda la instancia si
+la demanda total excedía la capacidad total de la flota — esto corría en
+`/solve` ANTES de sectorizar, así que el endpoint devolvía `400` sin dar
+oportunidad a `solve_instance_sectorized` de recortar por sector y
+postergar solo los clientes que no caben (mecanismo ya implementado en un
+delta anterior, pero nunca llegaba a ejecutarse).
+
+- **Added:** `Instancia(..., validar_capacidad_total: bool = True)` — el
+  endpoint `/solve` (y `load_instance`, usado por `POST /instances/{id}/
+  solve`, que también sectoriza) pasan `False`; el resto de los callers
+  (reschedule, tests directos de `Instancia`) mantienen el default
+  estricto sin cambios de comportamiento.
+
+#### RN-036 (nueva): contaminación de delivery_status al reusar instancia_id
+Reportado como "todas las rutas reprogramadas" / "vehículo totalmente
+reprogramado" en rutas recién creadas, sin haber tocado ningún botón de
+reprogramación. Causa raíz: `save_instance()` preserva `delivery_status`
+por id numérico entre resoluciones del mismo `instancia_id` (diseño
+correcto para corregir la MISMA instancia sin perder progreso de entrega)
+— pero al reusar el `instancia_id` por defecto del formulario entre
+pruebas con CSVs distintos, un cliente id=5 de una corrida vieja (ya
+reprogramado/entregado) contaminaba al cliente id=5 de un CSV nuevo sin
+relación real.
+
+- **Added:** antes de persistir, se compara por COORDENADAS (no por id)
+  el solapamiento entre los clientes que ya había en DB para ese
+  `instancia_id` y los del payload nuevo. Si menos del 50% coincide, se
+  resetea `delivery_status` a `'pendiente'` (y `delivery_note` a `NULL`)
+  para toda la instancia antes del upsert — se asume una instancia
+  distinta reusando el mismo nombre por accidente.
+
+#### Diferido, delta separado (confirmado con el usuario)
+- Reemplazar los polígonos hardcodeados de `sectorization.py` por un
+  GeoJSON real de distritos de Lima (fuente pública confiable) — mejora
+  de calidad de datos geográficos, de naturaleza distinta a estos 3 fixes
+  de lógica de negocio.
+
+---
+
 ## [Unreleased] — Fix: reparto de flota por sector según cantidad de clientes, no peso (SPEC v1.10)
 
 ### 🐛 Fix sobre RN-029 (métrica de reparto)
