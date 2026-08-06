@@ -1,4 +1,4 @@
-# ESPECIFICACIÓN VRP SOLVER (v1.10)
+# ESPECIFICACIÓN VRP SOLVER (v1.11)
 
 ## 1. Resumen del Negocio
 El sistema es un solver para el Problema de Ruteamiento de Vehículos (VRP) orientado a producción, capaz de escalar de 50 a 100k+ clientes. Optimiza rutas distribuyendo la demanda de los clientes en una flota de vehículos, minimizando el costo total (distancia) y garantizando que se respeten las restricciones de capacidad. Funciona mediante una arquitectura híbrida donde una API en Python orquesta motores de optimización de alto rendimiento escritos en C++.
@@ -66,6 +66,7 @@ El sistema es un solver para el Problema de Ruteamiento de Vehículos (VRP) orie
 * **RN-033 (Reprogramación - Inclusión Forzada):** Al resolver una instancia que incluye clientes marcados `force_include=true`, la orquestación RN-026 (postergar por exceso de 8h) no se les aplica — permanecen en la ruta aunque el resultado final supere las 8 horas.
 * **RN-034 (Reprogramación - Consumo del CSV):** Una fila del CSV de reprogramados se elimina únicamente cuando el `solve` de la instancia que la incluyó termina exitosamente y el cliente queda efectivamente en una ruta de la solución (no postergado). Si en ese mismo `solve` el cliente vuelve a quedar postergado, se re-escribe en el CSV en la misma llamada (aplicando RN-031/RN-032).
 * **RN-035 (Reprogramación - Descarga CSV):** `GET /reprogramados/export.csv` sirve el archivo CSV de reprogramados de la cuenta autenticada tal cual está en disco, como descarga (`Content-Type: text/csv`, `Content-Disposition: attachment`). Si la cuenta no tiene reprogramados pendientes, responde `404` en vez de un CSV vacío con `200`.
+* **RN-036 (Persistencia - Reset de Estados en Reuso de instancia_id):** Al guardar una instancia, si menos del 50% de los ids de clientes del payload nuevo coinciden en coordenadas (x, y) con los que ya existían en base de datos para ese mismo `instancia_id`, se resetea `delivery_status` a `'pendiente'` para todos los clientes de esa instancia antes de persistir — evita que un `instancia_id` reusado con contenido no relacionado (ej. el valor por defecto del formulario reutilizado entre pruebas con CSVs distintos) herede estados de entrega/reprogramación de una corrida anterior sin conexión real.
 * **RN-AUTH-001 (Autenticación):** Toda llamada a los endpoints protegidos requiere un token JWT válido.
 * **RN-CAT-001 (Catálogo Aislado):** El catálogo de vehículos está estrictamente aislado por cuenta de cliente (Account).
 * **RN-CAT-002 (Validación Catálogo):** La creación de un tipo de vehículo en el catálogo requiere pesos y volúmenes estrictamente mayores a cero.

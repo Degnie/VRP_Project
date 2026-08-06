@@ -99,6 +99,13 @@ class Instancia:
     flota: Flota
     clientes: List[Cliente]
     created_at: Optional[str] = None  # ISO 8601; None si no viene de persistencia
+    # RN-005/RN-029: /solve pasa False porque siempre sectoriza después
+    # (solve_instance_sectorized) — la instancia GLOBAL puede exceder
+    # capacidad total sin rechazar de entrada, dejando que RN-029 recorte
+    # por sector y postergue solo lo que no cabe en su sub-flota. El resto
+    # de los callers (reschedule, tests directos de Instancia) mantienen
+    # el default estricto.
+    validar_capacidad_total: bool = True
 
     def __post_init__(self):
         # Verificar IDs únicos
@@ -108,7 +115,7 @@ class Instancia:
 
         # Verificar demanda total
         demanda_total = sum(c.demanda for c in self.clientes)
-        if demanda_total > self.flota.capacidad_total:
+        if self.validar_capacidad_total and demanda_total > self.flota.capacidad_total:
             raise ValueError("demanda total excede capacidad de la flota")
 
         # Un cliente cuya demanda excede el vehículo más grande de la flota es

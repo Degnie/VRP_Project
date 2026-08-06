@@ -162,6 +162,37 @@ class PostgreSQLAdapter:
                 ]
             )
 
+            # RN-036: el ON CONFLICT DO UPDATE de abajo preserva delivery_status
+            # por id numérico entre resoluciones del mismo instancia_id — bug
+            # real reportado: reusar el instancia_id por defecto del formulario
+            # entre pruebas con CSVs distintos hacía que un cliente id=5 de una
+            # corrida vieja (ya reprogramado/entregado) contaminara al cliente
+            # id=5 de un CSV nuevo sin relación real, mostrando "todos los
+            # pedidos reprogramados" en rutas recién creadas. Se compara por
+            # COORDENADAS (no por id, que puede coincidir por azar) el
+            # solapamiento entre lo que ya había en DB y lo que llega ahora —
+            # si menos del 50% de los clientes nuevos coinciden en (x, y) con
+            # alguno viejo, se asume una instancia distinta reusando el mismo
+            # nombre por accidente, y se resetea delivery_status a 'pendiente'
+            # para TODA la instancia antes de tocar filas individuales.
+            cursor.execute(
+                "SELECT x, y FROM clientes WHERE instancia_id = %s",
+                [instance.id],
+            )
+            coordenadas_viejas = {(round(row[0], 6), round(row[1], 6)) for row in cursor.fetchall()}
+            if coordenadas_viejas:
+                coordenadas_nuevas = [
+                    (round(c.coordenada.x, 6), round(c.coordenada.y, 6)) for c in instance.clientes
+                ]
+                coincidencias = sum(1 for coord in coordenadas_nuevas if coord in coordenadas_viejas)
+                solapamiento = coincidencias / len(coordenadas_nuevas) if coordenadas_nuevas else 0.0
+                if solapamiento < 0.5:
+                    cursor.execute(
+                        "UPDATE clientes SET delivery_status = 'pendiente', delivery_note = NULL "
+                        "WHERE instancia_id = %s",
+                        [instance.id],
+                    )
+
             # Borra clientes que ya no están en el payload nuevo — resolver
             # la MISMA instancia con menos clientes que la corrida anterior
             # (ej. el dueño corrige el archivo y saca 2 direcciones erróneas)
@@ -321,7 +352,13 @@ class PostgreSQLAdapter:
             # Postgres siempre guarda en UTC en este proyecto (sin TimeZone
             # custom), así que el sufijo es correcto sin migrar la columna.
             created_at = (inst_row[2].isoformat() + "Z") if inst_row[2] else None
-            return Instancia(instance_id, depot, flota, clientes, created_at=created_at)
+            # RN-029: una instancia con demanda global > capacidad total
+            # puede haberse guardado exitosamente vía /solve (que ya pasa
+            # validar_capacidad_total=False, porque siempre sectoriza
+            # después) — recargarla acá con el default estricto volvería a
+            # explotar en el "resolver de nuevo" de POST /instances/{id}/solve,
+            # que también sectoriza vía _solve_and_persist.
+            return Instancia(instance_id, depot, flota, clientes, created_at=created_at, validar_capacidad_total=False)
 
         except psycopg2.Error:
             return None

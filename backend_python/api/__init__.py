@@ -958,11 +958,16 @@ def create_app() -> FastAPI:
             # nunca ve esto, pero evita que dos cuentas distintas usando el mismo
             # instancia_id (el default del form es literalmente "instancia-1"
             # para todos) se pisen los datos de flota/clientes entre sí.
+            # RN-029: /solve siempre sectoriza después (solve_instance_sectorized
+            # en _solve_and_persist) — la demanda GLOBAL puede exceder la
+            # capacidad total sin rechazar de entrada, dejando que RN-029
+            # recorte por sector y postergue solo lo que no cabe.
             instance = Instancia(
                 id=_namespaced_id(current_user.account_id, request.instancia_id),
                 deposito=depot,
                 flota=flota,
-                clientes=clientes
+                clientes=clientes,
+                validar_capacidad_total=False,
             )
             return _solve_and_persist(instance, current_user.account_id, request.instancia_id)
 
