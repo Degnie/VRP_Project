@@ -7,6 +7,38 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ---
 
+## [Unreleased] — Fase 1 de 3: Sectorización Geográfica (SPEC v1.6)
+
+### 📐 Delta v1.6 — sectorización geográfica de Lima Metropolitana
+
+Fase 1 de 3 del delta de sectorización aprobado por el usuario tras encontrar
+que la orquestación no sectorizada, con flota heterogénea grande (172
+pedidos, 7 camiones + 8 motos), llenaba un solo vehículo grande con
+centenas de clientes dispersos por toda la ciudad (65+ horas de ruta) antes
+de tocar el resto de la flota. Las Fases 2 (prioridad de reprogramación,
+tope de 1 reprogramación por pedido) y 3 (export CSV de pedidos
+reprogramados) quedan para deltas separados.
+
+### 📐 Reglas nuevas
+- **RN-028 (Orquestación - Sectorización Geográfica):** los clientes de una instancia se agrupan en 4 sectores fijos de Lima Metropolitana (Norte, Este, Sur, Centro) según polígonos geográficos predefinidos por el negocio, antes de resolver. Un cliente fuera de los 4 polígonos cae en Lima Centro (fallback).
+- **RN-029 (Orquestación - Reparto de Flota por Sector):** la flota total se distribuye entre los 4 sectores en proporción a la demanda de peso de cada uno — cada TIPO de vehículo (capacidad idéntica) se reparte por separado, para no dejar un sector con solo motos cuando necesitaba camiones grandes.
+- **RN-030 (Orquestación - RN-026/027 por Sector):** la orquestación de reintentos (RN-026 8h máximo, RN-027 5h mínimo) corre de forma independiente por sector, cada uno con su propia sub-flota (RN-029) y sub-lista de clientes (RN-028), en vez de sobre la instancia completa combinada.
+
+### ✨ Added
+- `backend_python/service/sectorization.py` (nuevo): `SECTORES` (polígonos de los 4 sectores), `assign_sector()` (point-in-polygon por ray casting), `split_fleet_by_sector()` (reparto proporcional por tipo de vehículo).
+- `backend_python/service/solver_orchestrator.py`: `solve_instance_sectorized()` — orquesta las 4 sub-resoluciones vía `solve_instance_with_retries()` (sin modificar su contrato) y combina rutas renumerando `vehicle_id`.
+- `backend_python/api/__init__.py`: `_solve_and_persist` pasa a llamar `solve_instance_sectorized` en vez de `solve_instance_with_retries` directo.
+
+### 🐛 Fixed (durante la implementación, alcance del mismo delta)
+- **Reparto de flota en bloques contiguos en vez de por tipo:** primera versión de `split_fleet_by_sector` ordenaba toda la flota por capacidad y repartía en bloques contiguos — un sector con 89% de la demanda de peso podía recibir solo las 8 motos de 30kg (210kg de capacidad total, insuficiente) mientras otro sector con mucha menos demanda se llevaba los 7 camiones de 1500kg. Corregido: cada tipo de vehículo (capacidad idéntica) se reparte proporcionalmente por separado.
+- **Doble conteo en `solve_instance_with_retries` (RN-011 rota):** si el bucle de reintentos se agotaba justo después de decidir postergar clientes en la última vuelta permitida, esos clientes quedaban simultáneamente en `solution.rutas` (de la vuelta anterior, nunca re-resuelta) y en `postponed` — reproducible ~50% de las corridas con el escenario de 172 pedidos vía OSRM real. Corregido saneando `solution` en el momento mismo de decidir la postergación, sin depender de que exista una vuelta siguiente.
+
+### Rechazado / Descartado
+- **Límite estricto de 8h en el test de integración con OSRM real:** el test original de RN-030 afirmaba que ninguna ruta excediera 8h con tolerancia de microsegundos contra el escenario real de 172 pedidos. Con sectores de más de `OSRM_MAX_TABLE_SIZE` nodos, `get_osrm_matrix` trocea la matriz de costos en múltiples llamadas de red reales — la duración medida de la MISMA instancia varió entre 8.2h y 10.8h en corridas sucesivas, sin relación con el algoritmo de sectorización. El test se reescribió para verificar solo lo determinista (cobertura RN-011 completa, sin `vehicle_id` duplicados); el límite de 8h en sí sigue cubierto de forma determinista por los tests con coordenadas sintéticas de `TestMaxRouteDurationOrchestration`.
+- **Corte operativo del repartidor a las 8h reales + reprogramación automática con prioridad:** el usuario propuso que, ante la variabilidad real de red, el repartidor corte su jornada a las 8h reales y lo pendiente pase a reprogramación con prioridad incrementada — buena idea, pero toca el flujo del repartidor y el campo de prioridad de reprogramación (Fase 2/3 de este mismo delta), fuera del alcance de esta Fase 1. Queda explícitamente diferida.
+
+---
+
 ## [0.7.27] — 2026-08-04
 
 ### 📐 Delta v1.5 — dashboard, notificaciones, comprobante fotográfico, orquestación VRPTW y catálogo con estados
