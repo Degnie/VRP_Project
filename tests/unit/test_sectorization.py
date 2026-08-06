@@ -1,42 +1,49 @@
 """Tests de sectorización geográfica de Lima Metropolitana (RN-028, RN-029)."""
 from backend_python.models import Coordinate, Flota
-from backend_python.service.sectorization import assign_sector, split_fleet_by_sector, SECTORES
+from backend_python.service.sectorization import assign_sector, split_fleet_by_sector, SECTOR_POR_DISTRITO
 
 
 class TestAssignSector:
-    """RN-028: un cliente se agrupa en el sector cuyo polígono contiene su
-    coordenada; fuera de los 4 polígonos, cae en Lima Centro (fallback).
+    """RN-028: un cliente se agrupa en el sector del distrito real (límites
+    IGN, vía GeoJSON) que contiene su coordenada; fuera de los 43 distritos
+    de Lima Metropolitana (incluye Callao, sin sector propio), cae en Lima
+    Centro (fallback).
 
     spec: RN-028
     """
 
-    def test_coordinate_in_lima_norte_polygon(self):
-        # Punto interior claro del polígono de Lima Norte (dado por el
-        # negocio) — Comas/Independencia, lejos de cualquier borde.
-        assert assign_sector(Coordinate(-77.05, -11.90)) == "Lima Norte"
+    def test_coordinate_in_comas_is_lima_norte(self):
+        # Centroide real de Comas (verificado con point-in-polygon contra
+        # el GeoJSON del IGN).
+        assert assign_sector(Coordinate(-77.0635463453997, -11.926446021116138)) == "Lima Norte"
 
-    def test_coordinate_in_lima_este_polygon(self):
-        # Punto interior claro del polígono de Lima Este — San Juan de
-        # Lurigancho/Ate.
-        assert assign_sector(Coordinate(-76.80, -12.00)) == "Lima Este"
+    def test_coordinate_in_san_juan_de_lurigancho_is_lima_este(self):
+        # Centroide real de San Juan de Lurigancho.
+        assert assign_sector(Coordinate(-76.951508656, -11.935543418666665)) == "Lima Este"
 
-    def test_coordinate_in_lima_sur_polygon(self):
-        # Punto interior claro del polígono de Lima Sur — Villa El
-        # Salvador/Chorrillos.
-        assert assign_sector(Coordinate(-77.10, -12.30)) == "Lima Sur"
+    def test_coordinate_in_villa_el_salvador_is_lima_sur(self):
+        # Centroide real de Villa El Salvador.
+        assert assign_sector(Coordinate(-76.95136821698114, -12.215162008254717)) == "Lima Sur"
 
-    def test_coordinate_in_lima_centro_polygon(self):
-        # Punto interior claro del polígono de Lima Centro — Cercado de
-        # Lima/San Isidro.
-        assert assign_sector(Coordinate(-77.00, -12.05)) == "Lima Centro"
+    def test_coordinate_in_miraflores_is_lima_centro(self):
+        # Centroide real de Miraflores.
+        assert assign_sector(Coordinate(-77.03780828405316, -12.125333725913622)) == "Lima Centro"
 
-    def test_coordinate_outside_all_polygons_falls_back_to_centro(self):
+    def test_coordinate_in_callao_falls_back_to_centro(self):
+        # Callao no tiene sector propio (el sistema es de Lima
+        # Metropolitana) — un punto ahí debe caer en el fallback.
+        assert assign_sector(Coordinate(-77.1386711158301, -12.024350755984557)) == "Lima Centro"
+
+    def test_coordinate_outside_all_districts_falls_back_to_centro(self):
         # Muy lejos de Lima (ej. en el mar o en otra región) — ningún
-        # polígono lo contiene, debe caer en el fallback.
+        # distrito lo contiene, debe caer en el fallback.
         assert assign_sector(Coordinate(-70.00, -18.00)) == "Lima Centro"
 
-    def test_all_four_sector_names_are_defined(self):
-        assert set(SECTORES.keys()) == {"Lima Norte", "Lima Este", "Lima Sur", "Lima Centro"}
+    def test_all_43_lima_districts_are_mapped_to_a_sector(self):
+        # Los 7 distritos de Callao se descartan (sin sector propio) —
+        # deben quedar exactamente los 43 de Lima Metropolitana.
+        assert len(SECTOR_POR_DISTRITO) == 43
+        assert set(SECTOR_POR_DISTRITO.values()) == {"Lima Norte", "Lima Este", "Lima Sur", "Lima Centro"}
 
 
 class TestSplitFleetBySector:
