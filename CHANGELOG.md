@@ -7,12 +7,13 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ---
 
-## [Unreleased] — Auditoría Técnica Integral (Fase 1-6)
+## [Unreleased] — Auditoría Técnica y Visual Integral (Fases 1-6 + UI/UX)
 
-### 🔍 Revisión de Arquitectura y Código
-Se realizó una auditoría técnica completa abarcando arquitectura, testing, rendimiento pragmático, integración y preparación para despliegue sobre el delta v1.8 (Sectorización y Reprogramación).
+### 🔍 Revisión de Arquitectura, Código y Capa Visual
+Se realizó una auditoría técnica completa abarcando arquitectura, testing, rendimiento pragmático, integración y preparación para despliegue sobre el delta v1.8 (Sectorización y Reprogramación). Adicionalmente, se ejecutó la auditoría de accesibilidad y experiencia de usuario (UI/UX).
 
-**Estado:** Arquitectura y código óptimos para el alcance actual. No se requiere sobreingeniería. La suite `verify` superó 290 tests con trazabilidad del 100% (63/63 reglas).
+**Estado Técnico:** Arquitectura y código óptimos para el alcance actual. No se requiere sobreingeniería. La suite `verify` superó 290 tests con trazabilidad del 100% (63/63 reglas).
+**Estado Visual:** UI y UX óptimos para el alcance actual. No se requiere sobreingeniería visual. Los flujos cubren los escenarios del SPEC sin fricción.
 
 ---
 
