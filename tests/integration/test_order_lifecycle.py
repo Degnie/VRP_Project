@@ -481,7 +481,7 @@ class TestOrderLifecycle:
         self._solve_instance(client, owner_token, instancia_id)
 
         import backend_python.api as api_module
-        original_solve_instance = api_module.solve_instance_with_retries
+        original_solve_instance = api_module.solve_instance_sectorized
 
         def racing_solve_instance(instance):
             delete_response = client.delete(
@@ -490,7 +490,7 @@ class TestOrderLifecycle:
             assert delete_response.status_code == 200
             return original_solve_instance(instance)
 
-        with patch.object(api_module, "solve_instance_with_retries", racing_solve_instance):
+        with patch.object(api_module, "solve_instance_sectorized", racing_solve_instance):
             response = client.post(
                 f"/instances/{instancia_id}/solve", headers={"Authorization": f"Bearer {owner_token}"}
             )
@@ -1298,7 +1298,7 @@ class TestOrderLifecycle:
         instancia_id = f"lc-solveeditrace-{uuid.uuid4().hex[:8]}"
         self._solve_instance(client, owner_token, instancia_id)
 
-        original_solve_instance = api_module.solve_instance_with_retries
+        original_solve_instance = api_module.solve_instance_sectorized
 
         def racing_solve_instance(instance):
             patch_response = client.patch(
@@ -1309,7 +1309,7 @@ class TestOrderLifecycle:
             assert patch_response.status_code == 200
             return original_solve_instance(instance)
 
-        with patch.object(api_module, "solve_instance_with_retries", racing_solve_instance):
+        with patch.object(api_module, "solve_instance_sectorized", racing_solve_instance):
             response = client.post(
                 f"/instances/{instancia_id}/solve",
                 headers={"Authorization": f"Bearer {owner_token}"},

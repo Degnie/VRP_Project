@@ -10,7 +10,7 @@ import logging
 
 from backend_python.config import get_config
 from backend_python.models import Coordinate, Cliente, Deposito, Flota, Instancia
-from backend_python.service.solver_orchestrator import solve_instance_with_retries
+from backend_python.service.solver_orchestrator import solve_instance_sectorized
 from backend_python.persistence.postgres_adapter import PostgreSQLAdapter, psycopg2
 from backend_python.persistence.mongodb_adapter import MongoDBAdapter
 from backend_python.auth import create_access_token, hash_password, verify_password
@@ -800,7 +800,7 @@ def create_app() -> FastAPI:
         # no pasó nada, pero la instancia ya quedó vacía. Solo se
         # persiste si el solve realmente produjo una solución.
         logger.info(f"Solving instance {log_label}")
-        solution, used_osrm, postponed_ids = solve_instance_with_retries(instance)
+        solution, used_osrm, postponed_ids = solve_instance_sectorized(instance)
         clientes_by_id = {c.id: c for c in instance.clientes}
         postponed_clients = [
             {"id": cid, "name": clientes_by_id[cid].customer_name}

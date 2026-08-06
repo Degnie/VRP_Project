@@ -17,6 +17,7 @@ from backend_python.models import (
 )
 from backend_python.config import get_config
 from backend_python.service.osrm_client import get_osrm_matrix, OSRMError
+from backend_python.service.sectorization import SECTORES, assign_sector, split_fleet_by_sector
 
 # En Windows, las extensiones .pyd compiladas con MinGW no resuelven sus DLLs
 # de runtime (libgcc, libstdc++, libwinpthread) vía PATH desde Python 3.8+ —
@@ -528,6 +529,18 @@ def solve_instance_with_retries(instance: Instancia) -> Tuple[Solucion, bool, Li
     postponed: List[int] = []
     solution: Optional[Solucion] = None
     used_osrm = False
+    # Snapshot de la última vuelta que sí logró resolver, en conjunto con
+    # el `postponed` que tenía en ESE momento — separado de `postponed`
+    # (que avanza apenas se decide postergar, antes de confirmar que la
+    # siguiente vuelta con esos clientes afuera realmente resuelve). Bug
+    # real: sin este snapshot, si la vuelta N postergaba clientes y la
+    # vuelta N+1 fallaba con ValueError (RN-013), el except conservaba
+    # `solution` de la vuelta N (con esos clientes TODAVÍA en una ruta)
+    # pero `postponed` ya los tenía agregados — terminaban contados dos
+    # veces (en una ruta Y en postergados), rompiendo RN-011.
+    last_valid_solution: Optional[Solucion] = None
+    last_valid_used_osrm = False
+    last_valid_postponed: List[int] = []
 
     for _ in range(config.MAX_REINTENTOS_ORQUESTACION):
         try:
@@ -538,10 +551,19 @@ def solve_instance_with_retries(instance: Instancia) -> Tuple[Solucion, bool, Li
             # que hay vehículos disponibles — la excepción no es un error
             # real del pedido del usuario, es un efecto secundario de esta
             # orquestación heurística. Se descarta ese intento y se queda
-            # con la última solución válida en vez de propagar un 500.
-            if solution is None:
+            # con la última solución que sí resolvió, junto con el
+            # `postponed` que tenía en ese momento (no el actual, que ya
+            # incluye los clientes que llevaron a este intento fallido).
+            if last_valid_solution is None:
                 raise
+            solution = last_valid_solution
+            used_osrm = last_valid_used_osrm
+            postponed = last_valid_postponed
             break
+        else:
+            last_valid_solution = solution
+            last_valid_used_osrm = used_osrm
+            last_valid_postponed = list(postponed)
         durations = {
             ruta.vehicle_id: _route_duration_hours(ruta, current_instance, used_osrm)
             for ruta in solution.rutas
@@ -597,6 +619,29 @@ def solve_instance_with_retries(instance: Instancia) -> Tuple[Solucion, bool, Li
                 c for c in current_instance.clientes if c.id not in client_ids_a_postergar
             ]
             postponed.extend(client_ids_a_postergar)
+            # Bug real: si esta es la ÚLTIMA vuelta permitida
+            # (MAX_REINTENTOS_ORQUESTACION), el for termina sin volver a
+            # llamar a solve_instance con la instancia ya reducida —
+            # `solution` se devuelve tal cual, con los clientes recién
+            # postergados TODAVÍA en sus rutas, contados dos veces junto
+            # con `postponed` (rompe RN-011). Se sanea `solution` acá
+            # mismo, quitando esos clientes de cualquier ruta que los
+            # tuviera, para que quede consistente con `postponed`
+            # exista o no una vuelta siguiente.
+            solution = Solucion(
+                instancia_id=solution.instancia_id,
+                rutas=[
+                    Ruta(
+                        vehicle_id=ruta.vehicle_id,
+                        secuencia=[cid for cid in ruta.secuencia if cid not in client_ids_a_postergar],
+                        costo=ruta.costo,
+                        duracion_horas=ruta.duracion_horas,
+                    )
+                    for ruta in solution.rutas
+                    if any(cid not in client_ids_a_postergar for cid in ruta.secuencia)
+                ],
+                costo_total=solution.costo_total,
+            )
             current_instance = Instancia(
                 id=current_instance.id,
                 deposito=current_instance.deposito,
@@ -672,6 +717,86 @@ def solve_instance_with_retries(instance: Instancia) -> Tuple[Solucion, bool, Li
         break
 
     return solution, used_osrm, postponed
+
+
+def solve_instance_sectorized(instance: Instancia) -> Tuple[Solucion, bool, List[int]]:
+    """Resuelve una instancia dividiéndola primero en 4 sectores
+    geográficos fijos de Lima Metropolitana (RN-028), repartiendo la
+    flota entre ellos en proporción a su demanda de peso (RN-029), y
+    corriendo la orquestación de reintentos RN-026/027 de forma
+    independiente por sector (RN-030) — en vez de sobre la instancia
+    completa combinada.
+
+    Fix de fondo: el solver base es CVRP puro, sin noción de tiempo, y
+    arma rutas por distancia+peso sin mirar cuántos vehículos quedan
+    disponibles. Con una flota grande y demanda que cabe en pocos
+    vehículos, la orquestación no sectorizada podía llenar 1 solo
+    vehículo grande con centenas de clientes dispersos por toda la
+    ciudad (65+ horas de ruta) antes de tocar el resto de la flota.
+    Sectores geográficamente compactos son mucho más fáciles de resolver
+    bajo 8h de forma natural, sin necesitar reducir capacidad a la fuerza.
+
+    Retorna: (Solucion combinada, used_osrm, postponed_client_ids)
+    """
+    clientes_por_sector: Dict[str, List[Cliente]] = {nombre: [] for nombre in SECTORES}
+    for cliente in instance.clientes:
+        sector = assign_sector(cliente.coordenada)
+        clientes_por_sector[sector].append(cliente)
+
+    demanda_por_sector = {
+        nombre: sum(c.demanda for c in clientes) for nombre, clientes in clientes_por_sector.items()
+    }
+    flota_por_sector = split_fleet_by_sector(instance.flota, demanda_por_sector)
+
+    todas_las_rutas: List[Ruta] = []
+    todos_postponed: List[int] = []
+    used_osrm_final = False
+    next_vehicle_id = 0
+
+    for nombre, clientes_sector in clientes_por_sector.items():
+        if not clientes_sector:
+            continue
+        flota_sector = flota_por_sector[nombre]
+        if flota_sector is None:
+            # Sector con demanda pero sin vehículos asignados (reparto
+            # proporcional lo redondeó a 0) — sus clientes quedan
+            # postergados, no hay flota con la que resolverlos hoy.
+            todos_postponed.extend(c.id for c in clientes_sector)
+            continue
+
+        sub_instance = Instancia(
+            id=f"{instance.id}::{nombre}",
+            deposito=instance.deposito,
+            flota=flota_sector,
+            clientes=clientes_sector,
+            created_at=instance.created_at,
+        )
+        sub_solution, used_osrm, postponed_sector = solve_instance_with_retries(sub_instance)
+        used_osrm_final = used_osrm_final or used_osrm
+        todos_postponed.extend(postponed_sector)
+
+        # Renumerar vehicle_id para que no colisionen entre sectores —
+        # cada sub-resolución arranca sus propios ids en 0.
+        for ruta in sub_solution.rutas:
+            todas_las_rutas.append(
+                Ruta(
+                    vehicle_id=next_vehicle_id,
+                    secuencia=ruta.secuencia,
+                    costo=ruta.costo,
+                    duracion_horas=ruta.duracion_horas,
+                )
+            )
+            next_vehicle_id += 1
+
+    if not todas_las_rutas:
+        raise ValueError("No feasible solution found")
+
+    solucion_combinada = Solucion(
+        instancia_id=instance.id,
+        rutas=todas_las_rutas,
+        costo_total=sum(r.costo for r in todas_las_rutas),
+    )
+    return solucion_combinada, used_osrm_final, todos_postponed
 
 
 def solve_instance(instance: Instancia) -> Tuple[Solucion, bool]:
