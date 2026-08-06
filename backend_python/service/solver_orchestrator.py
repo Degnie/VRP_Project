@@ -5,6 +5,7 @@ Ejecuta secuencia: construcción → optimización → validación.
 
 from typing import Dict, List, Optional, Tuple
 import logging
+import math
 import sys
 import os
 
@@ -511,11 +512,47 @@ def solve_instance_with_retries(instance: Instancia) -> Tuple[Solucion, bool, Li
 
         under_5h = any(durations[r.vehicle_id] < 5.0 for r in solution.rutas)
         if under_5h and current_instance.flota.num_vehiculos > 1:
+            # Bug real: reducir de a 1 vehículo por vuelta (llamando al
+            # solver completo en cada una) requiere tantas vueltas como
+            # vehículos sobran — con flotas grandes y muchas rutas cortas
+            # (20 motos disponibles para 50 pedidos de un mismo sector, el
+            # solver arma solo 6 rutas reales pero ninguna llega a 5h) esto
+            # agotaba MAX_REINTENTOS_ORQUESTACION mucho antes de consolidar
+            # lo suficiente. Se calcula de una vez cuántos vehículos hacen
+            # falta: la suma de horas de TRABAJO real (conducción+espera)
+            # de las rutas que el solver ya formó, dividida entre el punto
+            # medio del rango válido (6.5h), estima cuántas rutas de ese
+            # tamaño hacen falta para la misma carga de hoy — basado en
+            # len(solution.rutas) (lo que el solver realmente usó), no en
+            # num_vehiculos de la flota disponible (bug de una versión
+            # anterior de este fix: con 20 motos disponibles pero solo 6
+            # rutas reales, escalar por 20 en vez de por 6 daba un target
+            # inflado que nunca bajaba lo suficiente). Nunca baja de golpe
+            # a menos de la mitad de la flota actual, dejando que la vuelta
+            # siguiente termine de ajustar si hizo falta.
+            total_hours = sum(durations.values())
+            target_por_horas = max(1, math.ceil(total_hours / 6.5))
+            # La estimación por horas ignora capacidad — un target que deja
+            # la flota sin espacio para la demanda total (RN-005) hacía que
+            # Instancia() rechazara la reducción más abajo y el bucle se
+            # rindiera ahí mismo, sin haber consolidado nada. Se calcula
+            # también el mínimo de vehículos que sí entra en capacidad
+            # (capacidad total actual / vehículo más chico de la flota
+            # actual, conservador) y se toma el máximo entre ambos pisos.
+            demanda_total = sum(c.demanda for c in current_instance.clientes)
+            capacidad_min_vehiculo = (
+                min(current_instance.flota.capacidades_vehiculos)
+                if current_instance.flota.capacidades_vehiculos
+                else current_instance.flota.capacidad_por_vehiculo
+            )
+            target_por_capacidad = max(1, math.ceil(demanda_total / capacidad_min_vehiculo))
+            nuevo_num_vehiculos = max(target_por_horas, target_por_capacidad, len(solution.rutas) // 2, 1)
+            nuevo_num_vehiculos = min(nuevo_num_vehiculos, current_instance.flota.num_vehiculos - 1)
             nueva_flota = Flota(
-                num_vehiculos=current_instance.flota.num_vehiculos - 1,
+                num_vehiculos=nuevo_num_vehiculos,
                 capacidad_por_vehiculo=current_instance.flota.capacidad_por_vehiculo,
                 capacidades_vehiculos=(
-                    current_instance.flota.capacidades_vehiculos[:-1]
+                    current_instance.flota.capacidades_vehiculos[:nuevo_num_vehiculos]
                     if current_instance.flota.capacidades_vehiculos
                     else None
                 ),
