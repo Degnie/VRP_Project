@@ -1,4 +1,4 @@
-# ESPECIFICACIÓN VRP SOLVER (v1.7)
+# ESPECIFICACIÓN VRP SOLVER (v1.8)
 
 ## 1. Resumen del Negocio
 El sistema es un solver para el Problema de Ruteamiento de Vehículos (VRP) orientado a producción, capaz de escalar de 50 a 100k+ clientes. Optimiza rutas distribuyendo la demanda de los clientes en una flota de vehículos, minimizando el costo total (distancia) y garantizando que se respeten las restricciones de capacidad. Funciona mediante una arquitectura híbrida donde una API en Python orquesta motores de optimización de alto rendimiento escritos en C++.
@@ -65,6 +65,7 @@ El sistema es un solver para el Problema de Ruteamiento de Vehículos (VRP) orie
 * **RN-032 (Reprogramación - Tope de Prioridad):** La prioridad de reprogramación de un cliente tiene tope 1. Un cliente que ya tiene prioridad 1 y vuelve a no entregarse no incrementa más su prioridad — se marca `force_include=true` en su fila del CSV en su lugar.
 * **RN-033 (Reprogramación - Inclusión Forzada):** Al resolver una instancia que incluye clientes marcados `force_include=true`, la orquestación RN-026 (postergar por exceso de 8h) no se les aplica — permanecen en la ruta aunque el resultado final supere las 8 horas.
 * **RN-034 (Reprogramación - Consumo del CSV):** Una fila del CSV de reprogramados se elimina únicamente cuando el `solve` de la instancia que la incluyó termina exitosamente y el cliente queda efectivamente en una ruta de la solución (no postergado). Si en ese mismo `solve` el cliente vuelve a quedar postergado, se re-escribe en el CSV en la misma llamada (aplicando RN-031/RN-032).
+* **RN-035 (Reprogramación - Descarga CSV):** `GET /reprogramados/export.csv` sirve el archivo CSV de reprogramados de la cuenta autenticada tal cual está en disco, como descarga (`Content-Type: text/csv`, `Content-Disposition: attachment`). Si la cuenta no tiene reprogramados pendientes, responde `404` en vez de un CSV vacío con `200`.
 * **RN-AUTH-001 (Autenticación):** Toda llamada a los endpoints protegidos requiere un token JWT válido.
 * **RN-CAT-001 (Catálogo Aislado):** El catálogo de vehículos está estrictamente aislado por cuenta de cliente (Account).
 * **RN-CAT-002 (Validación Catálogo):** La creación de un tipo de vehículo en el catálogo requiere pesos y volúmenes estrictamente mayores a cero.

@@ -1047,6 +1047,79 @@ class TestOrderLifecycle:
         assert clients[0]["y"] == 20
         assert clients[0]["demand"] == 10
 
+    def test_export_reprogramados_csv_downloads_file(self, tmp_path, monkeypatch):
+        """RN-035: GET /reprogramados/export.csv sirve el CSV real de la
+        cuenta como descarga (text/csv, Content-Disposition attachment).
+
+        spec: RN-035
+        """
+        from backend_python.config import config as global_config
+        monkeypatch.setattr(global_config, "REPROGRAMADOS_DIR", str(tmp_path))
+
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle Reprog Export")
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_token, instancia_id)
+        client.put(
+            f"/instances/{instancia_id}/clients/1/status",
+            json={"status": "entregado"},
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        client.put(
+            f"/instances/{instancia_id}/clients/2/status",
+            json={"status": "rechazado"},
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        client.post(f"/instances/{instancia_id}/reschedule", headers={"Authorization": f"Bearer {owner_token}"})
+
+        response = client.get(
+            "/reprogramados/export.csv", headers={"Authorization": f"Bearer {owner_token}"}
+        )
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/csv")
+        assert "attachment" in response.headers["content-disposition"]
+        assert "cliente_id" in response.text
+        assert "\n2,1,False" in response.text
+
+    def test_export_reprogramados_csv_404_when_empty(self, tmp_path, monkeypatch):
+        """RN-035: sin reprogramados pendientes, 404 en vez de un CSV vacío
+        con 200 (mismo criterio que RN-EXP-002).
+
+        spec: RN-035
+        """
+        from backend_python.config import config as global_config
+        monkeypatch.setattr(global_config, "REPROGRAMADOS_DIR", str(tmp_path))
+
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle Reprog Export Empty")
+
+        response = client.get(
+            "/reprogramados/export.csv", headers={"Authorization": f"Bearer {owner_token}"}
+        )
+        assert response.status_code == 404
+
+    def test_export_reprogramados_csv_isolated_by_account(self, tmp_path, monkeypatch):
+        """El CSV exportado es solo de la cuenta autenticada, no de otras."""
+        from backend_python.config import config as global_config
+        monkeypatch.setattr(global_config, "REPROGRAMADOS_DIR", str(tmp_path))
+
+        client = self._client()
+        owner_a = self._register_owner(client, "Lifecycle Reprog Export A")
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_a, instancia_id)
+        client.put(
+            f"/instances/{instancia_id}/clients/2/status",
+            json={"status": "rechazado"},
+            headers={"Authorization": f"Bearer {owner_a}"},
+        )
+        client.post(f"/instances/{instancia_id}/reschedule", headers={"Authorization": f"Bearer {owner_a}"})
+
+        owner_b = self._register_owner(client, "Lifecycle Reprog Export B")
+        response = client.get(
+            "/reprogramados/export.csv", headers={"Authorization": f"Bearer {owner_b}"}
+        )
+        assert response.status_code == 404
+
     def test_invalid_status_rejected(self):
         client = self._client()
         owner_token = self._register_owner(client, "Lifecycle B")
