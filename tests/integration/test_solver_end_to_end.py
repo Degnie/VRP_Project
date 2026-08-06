@@ -194,6 +194,27 @@ class TestMaxRouteDurationOrchestration:
         assert solution.rutas[0].secuencia == [1]
         assert postponed == []
 
+    def test_force_include_ids_skips_postponement(self):
+        """RN-033: un cliente lejano que normalmente se postergaría por
+        exceso de 8h debe quedar en la ruta si su id está en
+        force_include_ids, aunque el resultado supere las 8h.
+
+        spec: RN-033
+        """
+        depot = Deposito(Coordinate(0.0, 0.0), "Depot")
+        flota = Flota(num_vehiculos=1, capacidad_por_vehiculo=10000)
+        clientes = [
+            Cliente(1, Coordinate(50.0, 0.0), 10),
+            Cliente(2, Coordinate(300.0, 0.0), 10),
+        ]
+        instance = Instancia(id="test_force_include", deposito=depot, flota=flota, clientes=clientes)
+
+        solution, _, postponed = solve_instance_with_retries(instance, force_include_ids={2})
+
+        assert postponed == []
+        visited = {cid for ruta in solution.rutas for cid in ruta.secuencia}
+        assert visited == {1, 2}
+
 
 class TestFleetSubutilizationOrchestration:
     """RN-027: si una ruta resultante toma menos de 5h, el orquestador debe
