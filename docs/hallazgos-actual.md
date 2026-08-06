@@ -1,7 +1,6 @@
-<hallazgos_infra>
-  <contexto_operativo> Auditoría de infraestructura superada. El proyecto cuenta con contenedores limpios (imágenes slim/alpine, non-root user) para backend y frontend, y con un pipeline de Integración Continua (GitHub Actions) configurado para frenar regresiones, respetando íntegramente las métricas de los RNF. </contexto_operativo>
-  <politicas_de_seguridad> Secretos por variables de entorno (.env). Ejecución de contenedores de app como usuarios sin privilegios (appuser/nginx). </politicas_de_seguridad>
-  <bugs> </bugs>
-  <reglas_propuestas> </reglas_propuestas>
-  <descartados> </descartados>
-</hallazgos_infra>
+<hallazgos_auditoria>
+  <contexto> Auditoría técnica (Etapas 1-6) completada tras la implementación del delta v1.8 (Sectorización y Reprogramación de CSV). La ejecución de `verify` reporta 290 tests exitosos y una trazabilidad perfecta de 63/63 IDs contra el `SPEC.md`. Arquitectura y código óptimos para el alcance actual. No se requiere sobreingeniería. </contexto>
+  <bugs> ninguno </bugs>
+  <reglas_propuestas> ninguna </reglas_propuestas>
+  <descartados> ninguno </descartados>
+</hallazgos_auditoria>
