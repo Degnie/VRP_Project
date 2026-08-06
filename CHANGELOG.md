@@ -7,6 +7,60 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ---
 
+## [Unreleased] — Fase 2 de 3: Prioridad de Reprogramación vía CSV (SPEC v1.7)
+
+### 📐 Delta v1.7 — CSV de reprogramados por cuenta, sin reprogramación automática en DB
+
+Fase 2 de 3 del delta de sectorización/reprogramación. En vez de reprogramar
+automáticamente en la base de datos, todo pedido que no se entrega en el día
+(por RN-026 al postponer por exceso de 8h, o por cierre de jornada con estado
+no-terminal pendiente/no_encontrado/rechazado vía `POST /instances/{id}/reschedule`)
+se agrega/actualiza en un archivo CSV en disco por cuenta
+(`reprogramados_{account_id}.csv`), con su prioridad de reprogramación
+incrementada. El operario, al armar la instancia del día, puede consultar
+cuántos reprogramados hay pendientes y agregarlos automáticamente.
+
+#### Reglas nuevas
+- **RN-031 (CSV de Pendientes por Cuenta):** todo cliente no entregado se
+  agrega/actualiza en el CSV de la cuenta, con snapshot completo (coordenadas,
+  demanda, contacto) — no solo su id, que no es único global entre instancias.
+- **RN-032 (Tope de Prioridad):** la prioridad tiene tope 1 — un cliente que
+  ya tiene prioridad 1 y vuelve a fallar no sube más, se marca
+  `force_include=true` en su lugar.
+- **RN-033 (Inclusión Forzada):** un cliente `force_include=true` nunca se
+  postpone por RN-026, aunque su ruta final supere las 8h.
+- **RN-034 (Consumo del CSV):** una fila se borra solo cuando el `solve` de
+  la instancia que la incluyó termina OK y el cliente quedó en una ruta (no
+  postergado) — nunca en el momento de "agregar automáticamente", para no
+  perder el registro si el proceso se interrumpe entre medio.
+
+#### Added
+- `backend_python/service/reprogramados_csv.py`: `read_pending`, `upsert`,
+  `remove` — CRUD del CSV por cuenta.
+- `backend_python/config.py`: `REPROGRAMADOS_DIR`.
+- `solve_instance_with_retries`/`solve_instance_sectorized` aceptan
+  `force_include_ids` (RN-033).
+- `GET /reprogramados/pending`: conteo + detalle de pendientes de la cuenta.
+- `POST /reprogramados/merge`: snapshot completo de los ids pedidos, para
+  que el frontend los agregue a la instancia en construcción.
+- `_solve_and_persist` y `reschedule_instance` ahora escriben/limpian el CSV
+  de la cuenta en los puntos correspondientes (RN-031/RN-034).
+
+#### Corregido en el camino
+- Diseño inicial del CSV solo guardaba `cliente_id` — insuficiente, porque
+  `cliente.id` se reusa en cada instancia nueva (no es una clave global) y la
+  instancia original puede haber sido borrada para cuando el operario decide
+  mezclar el pendiente. Corregido a snapshot completo por fila antes de
+  implementar el endpoint de merge.
+
+#### Rechazado/Descartado
+- Reprogramación automática en DB (mover el pedido a una instancia nueva sin
+  intervención del operario) — el usuario prefirió mantener el control manual
+  vía CSV + "agregar automáticamente" explícito, para no arriesgar decisiones
+  operativas del día sin supervisión.
+
+---
+
 ## [Unreleased] — Fase 1 de 3: Sectorización Geográfica (SPEC v1.6)
 
 ### 📐 Delta v1.6 — sectorización geográfica de Lima Metropolitana
