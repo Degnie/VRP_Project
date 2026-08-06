@@ -7,6 +7,37 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ---
 
+## [Unreleased] — Fase 3 de 3: Descarga del CSV de Reprogramados (SPEC v1.8)
+
+### 📐 Delta v1.8 — export real del CSV de reprogramados
+
+Fase 3 de 3, cierre del delta de sectorización/reprogramación. La Fase 2 ya
+dejó el CSV en disco y su consulta/merge vía API — lo único que faltaba era
+poder descargar el archivo real (Excel/hoja de cálculo), fuera de la app.
+
+#### Reglas nuevas
+- **RN-035 (Descarga CSV):** `GET /reprogramados/export.csv` sirve el
+  archivo tal cual está en disco para la cuenta autenticada
+  (`text/csv`, `Content-Disposition: attachment`). `404` si la cuenta no
+  tiene reprogramados pendientes, mismo criterio que RN-EXP-002.
+
+#### Added
+- `reprogramados_csv.csv_path()`: ruta al archivo real en disco (o `None`
+  si no existe), para servirlo sin re-serializar.
+- `GET /reprogramados/export.csv` — mismo patrón que
+  `GET /solutions/{id}/export.pdf`.
+
+#### Rechazado/Descartado
+- Import (subir un CSV editado a mano) — el usuario confirmó que no hace
+  falta; la edición de un pedido reprogramado ya pasa por
+  `PATCH /clients/{id}` antes de reprogramar, no por editar el archivo.
+
+Con esta fase se cierra el delta completo de sectorización + reprogramación
+(Fases 1-3), iniciado por el bug de 172 pedidos/15 vehículos que colapsaba
+a 1 sola ruta gigante.
+
+---
+
 ## [Unreleased] — Fase 2 de 3: Prioridad de Reprogramación vía CSV (SPEC v1.7)
 
 ### 📐 Delta v1.7 — CSV de reprogramados por cuenta, sin reprogramación automática en DB
