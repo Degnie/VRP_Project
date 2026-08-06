@@ -106,3 +106,64 @@ class TestSplitFleetBySector:
         reparto = split_fleet_by_sector(flota, demanda_por_sector)
 
         assert all(f is None for f in reparto.values())
+
+    def test_every_sector_with_demand_gets_at_least_one_vehicle(self):
+        """RN-029: con flota chica (4 vehículos, 4 sectores con demanda), el
+        reparto proporcional puro (math.floor) podía dejar un sector con
+        demanda baja pero > 0 en 0 vehículos — quedaba completamente sin
+        ruta. Cada sector con demanda > 0 debe recibir garantizado 1
+        vehículo antes del reparto proporcional del resto.
+
+        Bug real reportado: con una flota de 4 vehículos y demanda muy
+        desigual entre sectores (ej. Lima Este con poca demanda relativa),
+        Lima Este quedaba en 0 vehículos — todos sus clientes se
+        descartaban/postergaban sin generar ninguna ruta.
+
+        spec: RN-029
+        """
+        flota = Flota(num_vehiculos=4, capacidad_por_vehiculo=1000)
+        demanda_por_sector = {
+            "Lima Norte": 970.0,
+            "Lima Este": 10.0,
+            "Lima Sur": 10.0,
+            "Lima Centro": 10.0,
+        }
+        reparto = split_fleet_by_sector(flota, demanda_por_sector)
+
+        for nombre, demanda in demanda_por_sector.items():
+            if demanda > 0:
+                assert reparto[nombre] is not None, f"{nombre} se quedó sin flota pese a tener demanda"
+                assert reparto[nombre].num_vehiculos >= 1
+
+    def test_sector_with_no_demand_still_gets_no_fleet(self):
+        """El piso de 1 vehículo aplica solo a sectores CON demanda — un
+        sector vacío ese día no debe recibir flota desperdiciada."""
+        flota = Flota(num_vehiculos=4, capacidad_por_vehiculo=1000)
+        demanda_por_sector = {
+            "Lima Norte": 500.0,
+            "Lima Este": 500.0,
+            "Lima Sur": 0.0,
+            "Lima Centro": 0.0,
+        }
+        reparto = split_fleet_by_sector(flota, demanda_por_sector)
+
+        assert reparto["Lima Sur"] is None
+        assert reparto["Lima Centro"] is None
+
+    def test_fewer_vehicles_than_sectors_drops_lowest_demand_sector(self):
+        """Confirmado por el usuario: si hay menos vehículos que sectores
+        con demanda, el/los sector(es) de MENOR demanda se quedan sin
+        flota — no se inventan vehículos ni se mezclan pedidos entre
+        sectores."""
+        flota = Flota(num_vehiculos=2, capacidad_por_vehiculo=1000)
+        demanda_por_sector = {
+            "Lima Norte": 500.0,
+            "Lima Este": 300.0,
+            "Lima Sur": 100.0,
+            "Lima Centro": 50.0,
+        }
+        reparto = split_fleet_by_sector(flota, demanda_por_sector)
+
+        total_repartido = sum(f.num_vehiculos for f in reparto.values() if f is not None)
+        assert total_repartido <= 2
+        assert reparto["Lima Centro"] is None

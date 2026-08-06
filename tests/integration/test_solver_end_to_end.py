@@ -306,6 +306,63 @@ class TestSectorizedOrchestration:
         vehicle_ids = [ruta.vehicle_id for ruta in solution.rutas]
         assert len(vehicle_ids) == len(set(vehicle_ids))
 
+    def test_sector_demand_exceeding_subfleet_capacity_postpones_instead_of_raising(self):
+        """RN-029: si la sub-flota que le toca a un sector (por reparto
+        proporcional de RN-029) no alcanza para su demanda total, el sector
+        no debe tumbar la resolución completa con ValueError — debe
+        resolver los clientes que sí caben en la capacidad disponible y
+        postergar el resto (mismo mecanismo RN-026/RN-031 de siempre).
+
+        Bug real reportado: Instancia.__post_init__ rechaza con excepción
+        dura si demanda_total > capacidad_total; en sectorización esto
+        podía tumbar un sector entero en vez de resolver parcialmente.
+
+        spec: RN-029
+        """
+        depot = Deposito(Coordinate(-77.0350, -12.0464), "Depot Lima")
+        # 2 vehículos de 15kg: la instancia GLOBAL sí alcanza (30kg de
+        # capacidad total para 30kg de demanda total), pero el reparto por
+        # sector le da 1 vehículo (15kg) a cada sector — Lima Norte tiene 2
+        # clientes de 10kg c/u (20kg > 15kg de su sub-flota), Lima Sur tiene
+        # 1 solo cliente de 10kg (sí cabe). Antes de este fix, el propio
+        # armado de la sub-instancia de Lima Norte explotaba con ValueError.
+        flota = Flota(num_vehiculos=2, capacidad_por_vehiculo=15)
+        clientes = [
+            Cliente(1, Coordinate(-77.05, -11.90), 10),  # Lima Norte
+            Cliente(2, Coordinate(-77.03, -11.85), 10),  # Lima Norte
+            Cliente(3, Coordinate(-77.10, -12.30), 10),  # Lima Sur
+        ]
+        instance = Instancia(id="test_sector_over_capacity", deposito=depot, flota=flota, clientes=clientes)
+
+        solution, _, postponed = solve_instance_sectorized(instance)
+
+        covered_ids = {cid for ruta in solution.rutas for cid in ruta.secuencia}
+        assert covered_ids | set(postponed) == {1, 2, 3}
+        assert len(postponed) >= 1  # al menos 1 no entró por falta de capacidad en Lima Norte
+        assert 3 in covered_ids  # Lima Sur no se ve afectado por el exceso de Lima Norte
+
+    def test_low_demand_sector_still_gets_a_route_with_small_fleet(self):
+        """RN-029: con una flota chica (4 vehículos) y 4 sectores con
+        demanda desigual, el sector de menor demanda debe recibir su
+        vehículo mínimo garantizado y generar ruta — no quedar
+        completamente descartado por el redondeo proporcional.
+
+        spec: RN-029
+        """
+        depot = Deposito(Coordinate(-77.0350, -12.0464), "Depot Lima")
+        flota = Flota(num_vehiculos=4, capacidad_por_vehiculo=1000)
+        clientes = [
+            Cliente(1, Coordinate(-77.05, -11.90), 300),  # Lima Norte, demanda alta
+            Cliente(2, Coordinate(-77.03, -11.85), 300),  # Lima Norte
+            Cliente(3, Coordinate(-76.80, -12.00), 5),    # Lima Este, demanda baja
+        ]
+        instance = Instancia(id="test_low_demand_sector_gets_route", deposito=depot, flota=flota, clientes=clientes)
+
+        solution, _, postponed = solve_instance_sectorized(instance)
+
+        covered_ids = {cid for ruta in solution.rutas for cid in ruta.secuencia}
+        assert 3 in covered_ids, "Lima Este (baja demanda) quedó sin ruta pese a tener flota chica disponible"
+
     def test_sectorized_covers_every_client_no_duplicates(self):
         """El escenario real (172 pedidos, flota heterogénea grande, vía
         OSRM real) preserva RN-011 (cobertura única, sin duplicados) a
