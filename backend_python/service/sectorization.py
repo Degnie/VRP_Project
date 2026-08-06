@@ -64,25 +64,40 @@ def assign_sector(coord: Coordinate) -> str:
 
 
 def split_fleet_by_sector(
-    flota: Flota, demanda_por_sector: Dict[str, float]
+    flota: Flota, num_clientes_por_sector: Dict[str, int]
 ) -> Dict[str, Optional[Flota]]:
-    """Reparte `flota` entre los sectores de `demanda_por_sector` en
-    proporción al peso de demanda de cada uno (RN-029), preservando el mix
-    de tipos de vehículo — cada TIPO de vehículo (agrupado por capacidad
-    idéntica: ej. las 8 motos de 30kg, los 7 camiones de 1500kg) se reparte
-    proporcionalmente entre sectores por separado, en vez de repartir la
-    lista completa en bloques contiguos ordenados por capacidad.
+    """Reparte `flota` entre los sectores de `num_clientes_por_sector` en
+    proporción a la CANTIDAD DE CLIENTES de cada uno (RN-029), preservando
+    el mix de tipos de vehículo — cada TIPO de vehículo (agrupado por
+    capacidad idéntica: ej. las 8 motos de 30kg, los 7 camiones de 1500kg)
+    se reparte proporcionalmente entre sectores por separado, en vez de
+    repartir la lista completa en bloques contiguos ordenados por
+    capacidad.
 
-    Bug real de una versión anterior: repartir la lista entera ordenada de
-    mayor a menor en bloques contiguos podía dejar TODOS los camiones
-    grandes en el primer sector procesado y todas las motos chicas en el
-    siguiente, sin importar si ese sector realmente tenía la demanda de
-    peso que necesitaba esa capacidad — un sector con 89% de demanda de
-    peso pero que recibía solo motos por el redondeo terminaba con
-    capacidad total menor a su propia demanda, rechazado por
-    Instancia.__post_init__ (RN-005) antes de poder resolverse. Repartir
-    cada tipo por separado evita que un sector se quede sin la capacidad
-    grande que necesita solo por el orden de asignación.
+    Bug real: repartir por PESO de demanda (versión anterior de esta
+    función) le daba más vehículos a un sector con pocos clientes de mucho
+    peso individual que a uno con muchos clientes de poco peso c/u — pero
+    RN-026 estima el tiempo de una ruta por CANTIDAD de paradas (~15min
+    fijos c/u) más conducción, no por peso transportado. Un sector con
+    muchos clientes dispersos podía quedar con 1 solo vehículo (insuficiente
+    para cubrir tantas paradas en 8h) mientras otro con pocos clientes mal
+    proporcionalmente se llevaba más flota de la que necesitaba — 100
+    pedidos parejos entre 4 sectores y 4 vehículos reprogramaba ~46% por
+    esto. La validación de exceso de PESO por sector sigue existiendo
+    (ver _trim_clients_to_fleet_capacity en solver_orchestrator.py), solo
+    cambia qué métrica decide CUÁNTOS vehículos recibe cada sector.
+
+    Bug real de una versión anterior (previo a este cambio de métrica):
+    repartir la lista entera ordenada de mayor a menor en bloques
+    contiguos podía dejar TODOS los camiones grandes en el primer sector
+    procesado y todas las motos chicas en el siguiente, sin importar si
+    ese sector realmente tenía la carga que necesitaba esa capacidad — un
+    sector con 89% de la carga pero que recibía solo motos por el
+    redondeo terminaba con capacidad total menor a su propia demanda de
+    peso, rechazado por Instancia.__post_init__ (RN-005) antes de poder
+    resolverse. Repartir cada tipo por separado evita que un sector se
+    quede sin la capacidad grande que necesita solo por el orden de
+    asignación.
 
     Un sector sin vehículos asignados es None — Flota exige
     num_vehiculos >= 1, no puede representar "0 vehículos" con una
@@ -91,28 +106,28 @@ def split_fleet_by_sector(
     capacidades_todas = flota.capacidades_vehiculos or (
         [flota.capacidad_por_vehiculo] * flota.num_vehiculos
     )
-    demanda_total = sum(demanda_por_sector.values())
+    total_clientes = sum(num_clientes_por_sector.values())
 
-    if demanda_total <= 0:
-        return {nombre: None for nombre in demanda_por_sector}
+    if total_clientes <= 0:
+        return {nombre: None for nombre in num_clientes_por_sector}
 
     capacidades_disponibles = sorted(capacidades_todas)  # ascendente: se dona la más chica primero
-    capacidades_por_sector: Dict[str, List[float]] = {nombre: [] for nombre in demanda_por_sector}
+    capacidades_por_sector: Dict[str, List[float]] = {nombre: [] for nombre in num_clientes_por_sector}
 
-    # Piso de 1 vehículo por sector con demanda > 0 (RN-029), reservado
+    # Piso de 1 vehículo por sector con clientes > 0 (RN-029), reservado
     # ANTES del reparto proporcional del resto. Bug real: repartir
-    # estrictamente proporcional (math.floor) podía dejar un sector de
-    # demanda baja pero > 0 en 0 vehículos — quedaba completamente sin
+    # estrictamente proporcional (math.floor) podía dejar un sector con
+    # pocos clientes pero > 0 en 0 vehículos — quedaba completamente sin
     # ruta, sus clientes se descartaban/postergaban en bloque (reportado
     # como "Lima Este descartado"). Si la flota total no alcanza para
-    # cubrir el piso de todos los sectores con demanda, se prioriza a los
-    # de MAYOR demanda primero — el/los de menor demanda se quedan sin
+    # cubrir el piso de todos los sectores con clientes, se prioriza a los
+    # de MÁS clientes primero — el/los de menos clientes se quedan sin
     # flota, comportamiento esperado y confirmado por el negocio.
-    sectores_con_demanda_desc = [
-        nombre for nombre, _ in sorted(demanda_por_sector.items(), key=lambda kv: kv[1], reverse=True)
-        if demanda_por_sector[nombre] > 0
+    sectores_con_clientes_desc = [
+        nombre for nombre, _ in sorted(num_clientes_por_sector.items(), key=lambda kv: kv[1], reverse=True)
+        if num_clientes_por_sector[nombre] > 0
     ]
-    for nombre in sectores_con_demanda_desc:
+    for nombre in sectores_con_clientes_desc:
         if not capacidades_disponibles:
             break
         capacidades_por_sector[nombre].append(capacidades_disponibles.pop(0))
@@ -123,26 +138,26 @@ def split_fleet_by_sector(
     for cap in capacidades_disponibles:
         tipos[cap] = tipos.get(cap, 0) + 1
 
-    nombres_ordenados = sorted(demanda_por_sector.items(), key=lambda kv: kv[1], reverse=True)
+    nombres_ordenados = sorted(num_clientes_por_sector.items(), key=lambda kv: kv[1], reverse=True)
 
     for capacidad, cantidad in tipos.items():
         conteos: Dict[str, int] = {}
-        for nombre, demanda in demanda_por_sector.items():
-            proporcion = demanda / demanda_total
+        for nombre, num_clientes in num_clientes_por_sector.items():
+            proporcion = num_clientes / total_clientes
             conteos[nombre] = math.floor(proporcion * cantidad)
 
         # Redondeo hacia abajo puede dejar unidades de este tipo sin
-        # repartir — se asignan al sector con mayor demanda, una por una.
+        # repartir — se asignan al sector con más clientes, una por una.
         sobrantes = cantidad - sum(conteos.values())
         idx = 0
         while sobrantes > 0 and nombres_ordenados:
-            nombre, demanda = nombres_ordenados[idx % len(nombres_ordenados)]
-            if demanda > 0:
+            nombre, num_clientes = nombres_ordenados[idx % len(nombres_ordenados)]
+            if num_clientes > 0:
                 conteos[nombre] += 1
                 sobrantes -= 1
             idx += 1
             if idx > len(nombres_ordenados) * cantidad + 1:
-                break  # ningún sector restante tiene demanda > 0
+                break  # ningún sector restante tiene clientes > 0
 
         for nombre, n in conteos.items():
             capacidades_por_sector[nombre].extend([capacidad] * n)

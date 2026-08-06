@@ -789,10 +789,19 @@ def solve_instance_sectorized(
         sector = assign_sector(cliente.coordenada)
         clientes_por_sector[sector].append(cliente)
 
-    demanda_por_sector = {
-        nombre: sum(c.demanda for c in clientes) for nombre, clientes in clientes_por_sector.items()
+    # RN-029: se reparte por CANTIDAD de clientes, no por peso — RN-026
+    # estima el tiempo de una ruta por cantidad de paradas (~15min fijos
+    # c/u) más conducción, no por peso transportado. Repartir por peso
+    # podía darle más vehículos a un sector con pocos clientes de mucho
+    # peso individual que a uno con muchos clientes de poco peso c/u —
+    # este último es el que realmente necesita más flota para no exceder
+    # las 8h (bug real: 100 pedidos parejos entre 4 sectores + 4 vehículos
+    # reprogramaba ~46% porque cada sector recibía 1 solo vehículo, que no
+    # alcanzaba a visitar 25 paradas en 8h aunque el peso sobrara).
+    num_clientes_por_sector = {
+        nombre: len(clientes) for nombre, clientes in clientes_por_sector.items()
     }
-    flota_por_sector = split_fleet_by_sector(instance.flota, demanda_por_sector)
+    flota_por_sector = split_fleet_by_sector(instance.flota, num_clientes_por_sector)
 
     todas_las_rutas: List[Ruta] = []
     todos_postponed: List[int] = []
