@@ -38,6 +38,13 @@ def _path(base_dir: str, account_id: str) -> Path:
     return Path(base_dir) / f"reprogramados_{account_id}.csv"
 
 
+def csv_path(base_dir: str, account_id: str) -> Optional[Path]:
+    """RN-035: ruta al archivo real en disco, para servirlo como descarga.
+    None si la cuenta no tiene reprogramados pendientes."""
+    path = _path(base_dir, account_id)
+    return path if path.exists() else None
+
+
 def read_pending(base_dir: str, account_id: str) -> List[ReprogramadoRow]:
     path = _path(base_dir, account_id)
     if not path.exists():
@@ -105,4 +112,4 @@ def remove(base_dir: str, account_id: str, cliente_ids: List[int]) -> None:
     _write(base_dir, account_id, remaining)
 
 
-__all__ = ["ReprogramadoRow", "read_pending", "upsert", "remove"]
+__all__ = ["ReprogramadoRow", "read_pending", "upsert", "remove", "csv_path"]

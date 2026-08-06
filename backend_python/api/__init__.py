@@ -11,7 +11,7 @@ import logging
 from backend_python.config import get_config
 from backend_python.models import Coordinate, Cliente, Deposito, Flota, Instancia
 from backend_python.service.solver_orchestrator import solve_instance_sectorized
-from backend_python.service.reprogramados_csv import ReprogramadoRow, read_pending, remove as remove_reprogramados, upsert as upsert_reprogramados
+from backend_python.service.reprogramados_csv import ReprogramadoRow, csv_path as reprogramados_csv_path, read_pending, remove as remove_reprogramados, upsert as upsert_reprogramados
 from backend_python.persistence.postgres_adapter import PostgreSQLAdapter, psycopg2
 from backend_python.persistence.mongodb_adapter import MongoDBAdapter
 from backend_python.auth import create_access_token, hash_password, verify_password
@@ -1728,6 +1728,21 @@ def create_app() -> FastAPI:
         )
 
         return RescheduleResponse(new_instancia_id=new_visible_id, rescheduled_client_ids=moved_ids)
+
+    @app.get("/reprogramados/export.csv")
+    def export_reprogramados_csv(
+        current_user: CurrentUser = Depends(require_role("dueño", "operario")),
+    ):
+        """RN-035: descarga el CSV de reprogramados de la cuenta tal cual
+        está en disco — mismo patrón que GET /solutions/{id}/export.pdf."""
+        path = reprogramados_csv_path(config.REPROGRAMADOS_DIR, current_user.account_id)
+        if path is None:
+            raise HTTPException(status_code=404, detail="No hay reprogramados pendientes para esta cuenta")
+        return Response(
+            content=path.read_bytes(),
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="reprogramados.csv"'},
+        )
 
     @app.get("/reprogramados/pending", response_model=ReprogramadosPendingResponse)
     def get_reprogramados_pending(
