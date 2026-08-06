@@ -363,6 +363,47 @@ class TestSectorizedOrchestration:
         covered_ids = {cid for ruta in solution.rutas for cid in ruta.secuencia}
         assert 3 in covered_ids, "Lima Este (baja demanda) quedó sin ruta pese a tener flota chica disponible"
 
+    def test_unbalanced_sectors_get_vehicles_proportional_to_client_count(self):
+        """RN-029: con sectores DESBALANCEADOS en cantidad de clientes,
+        repartir por PESO (versión anterior) podía darle más flota a un
+        sector con pocos clientes de mucho peso individual que a uno con
+        muchos clientes de poco peso c/u — el segundo es el que realmente
+        necesita más vehículos por carga horaria (RN-026: ~15min fijos por
+        parada, no por peso). Aísla el efecto con un caso claramente
+        desbalanceado en cantidad, parejo en capacidad disponible.
+
+        Nota de alcance (confirmado con el usuario): este fix mejora casos
+        desbalanceados como este, pero NO resuelve el escenario donde los 4
+        sectores tienen la MISMA cantidad de clientes y la flota total es
+        justa 1:1 con la cantidad de sectores — ahí ningún criterio de
+        reparto puede darle más de 1 vehículo a cada sector, y una
+        reprogramación alta es un límite real de flota insuficiente para el
+        volumen, no un bug de reparto (ver test_sectorized_covers_every_
+        client_no_duplicates para ese caso, que solo valida invariantes
+        estructurales, no un tope de postergados).
+
+        spec: RN-029
+        """
+        depot = Deposito(Coordinate(-77.0350, -12.0464), "Depot Lima")
+        capacidades = [1500.0, 1500.0, 600.0, 600.0]
+        flota = Flota(num_vehiculos=4, capacidad_por_vehiculo=capacidades[0], capacidades_vehiculos=capacidades)
+        clientes = []
+        cid = 1
+        for i in range(3):
+            clientes.append(Cliente(cid, Coordinate(-77.05 + i * 0.01, -11.90 + i * 0.01), 300))  # Lima Norte
+            cid += 1
+        for i in range(25):
+            clientes.append(Cliente(cid, Coordinate(-76.75 + i * 0.02, -12.10 - i * 0.005), 2))  # Lima Este, disperso
+            cid += 1
+        instance = Instancia(id="test_unbalanced_sectors", deposito=depot, flota=flota, clientes=clientes)
+
+        solution, _, postponed = solve_instance_sectorized(instance)
+
+        vehicle_ids_este = {r.vehicle_id for r in solution.rutas if any(4 <= cid <= 28 for cid in r.secuencia)}
+        # Lima Este (25 clientes) debe recibir más de 1 vehículo del reparto
+        # proporcional — Lima Norte (3 clientes) no necesita más de 1.
+        assert len(vehicle_ids_este) > 1, "Lima Este (25 clientes) no recibió más de 1 vehículo pese a ser el sector con más carga"
+
     def test_sectorized_covers_every_client_no_duplicates(self):
         """El escenario real (172 pedidos, flota heterogénea grande, vía
         OSRM real) preserva RN-011 (cobertura única, sin duplicados) a
