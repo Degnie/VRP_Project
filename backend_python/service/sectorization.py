@@ -1,47 +1,76 @@
 """Sectorización geográfica de Lima Metropolitana (RN-028, RN-029)."""
 
+import json
 import math
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from backend_python.models import Coordinate, Flota
 
-# Polígonos por sector, dados por el negocio (coordenadas [x=lon, y=lat]).
-# Lima Centro es el sector de fallback: un cliente fuera de los 4 polígonos
-# cae ahí (RN-028) en vez de quedar sin sector.
-SECTORES: Dict[str, List[Coordinate]] = {
-    "Lima Norte": [
-        Coordinate(-77.22, -11.70), Coordinate(-76.95, -11.70), Coordinate(-76.83, -11.78),
-        Coordinate(-76.80, -11.90), Coordinate(-76.82, -12.00), Coordinate(-77.00, -12.05),
-        Coordinate(-77.22, -12.00),
-    ],
-    "Lima Este": [
-        Coordinate(-76.82, -11.78), Coordinate(-76.70, -11.85), Coordinate(-76.68, -12.05),
-        Coordinate(-76.69, -12.25), Coordinate(-76.72, -12.40), Coordinate(-76.84, -12.38),
-        Coordinate(-76.90, -12.18), Coordinate(-76.88, -11.95),
-    ],
-    "Lima Sur": [
-        Coordinate(-77.22, -12.18), Coordinate(-77.05, -12.18), Coordinate(-76.90, -12.20),
-        Coordinate(-76.84, -12.38), Coordinate(-76.90, -12.50), Coordinate(-77.05, -12.55),
-        Coordinate(-77.22, -12.50),
-    ],
-    "Lima Centro": [
-        Coordinate(-77.10, -12.00), Coordinate(-76.88, -12.00), Coordinate(-76.86, -12.08),
-        Coordinate(-76.90, -12.18), Coordinate(-77.05, -12.18), Coordinate(-77.12, -12.10),
-    ],
-}
-
 _SECTOR_FALLBACK = "Lima Centro"
 
+# Mapeo distrito real (IGN) -> sector de negocio, aprobado por el usuario.
+# Callao (7 distritos) queda deliberadamente fuera: el sistema es de Lima
+# Metropolitana, sin sector propio para Callao — cae en el fallback.
+_DISTRITO_A_SECTOR: Dict[str, str] = {
+    "ANCON": "Lima Norte", "CARABAYLLO": "Lima Norte", "COMAS": "Lima Norte",
+    "INDEPENDENCIA": "Lima Norte", "LOS OLIVOS": "Lima Norte",
+    "PUENTE PIEDRA": "Lima Norte", "SAN MARTIN DE PORRES": "Lima Norte",
+    "SANTA ROSA": "Lima Norte",
+    "ATE": "Lima Este", "CHACLACAYO": "Lima Este", "CIENEGUILLA": "Lima Este",
+    "EL AGUSTINO": "Lima Este", "LA MOLINA": "Lima Este", "LURIGANCHO": "Lima Este",
+    "SAN JUAN DE LURIGANCHO": "Lima Este", "SANTA ANITA": "Lima Este",
+    "CHORRILLOS": "Lima Sur", "LURIN": "Lima Sur", "PACHACAMAC": "Lima Sur",
+    "PUCUSANA": "Lima Sur", "PUNTA HERMOSA": "Lima Sur", "PUNTA NEGRA": "Lima Sur",
+    "SAN BARTOLO": "Lima Sur", "SAN JUAN DE MIRAFLORES": "Lima Sur",
+    "SANTA MARIA DEL MAR": "Lima Sur", "VILLA EL SALVADOR": "Lima Sur",
+    "VILLA MARIA DEL TRIUNFO": "Lima Sur",
+    "BARRANCO": "Lima Centro", "BREÑA": "Lima Centro", "JESUS MARIA": "Lima Centro",
+    "LA VICTORIA": "Lima Centro", "LIMA": "Lima Centro", "LINCE": "Lima Centro",
+    "MAGDALENA DEL MAR": "Lima Centro", "MIRAFLORES": "Lima Centro",
+    "PUEBLO LIBRE": "Lima Centro", "RIMAC": "Lima Centro", "SAN BORJA": "Lima Centro",
+    "SAN ISIDRO": "Lima Centro", "SAN LUIS": "Lima Centro", "SAN MIGUEL": "Lima Centro",
+    "SANTIAGO DE SURCO": "Lima Centro", "SURQUILLO": "Lima Centro",
+}
 
-def _point_in_polygon(point: Coordinate, polygon: List[Coordinate]) -> bool:
-    """Ray casting estándar: True si `point` cae dentro de `polygon`."""
-    x, y = point.x, point.y
+_GEOJSON_PATH = Path(__file__).parent / "data" / "lima_callao_distritos.geojson"
+
+
+def _cargar_distritos() -> List[tuple]:
+    """Carga (sector, multipolygon) por cada distrito mapeado del GeoJSON.
+    multipolygon: List[polygon], polygon: List[ring], ring: List[(x, y)] —
+    primer ring es el contorno exterior, el resto son huecos/islas."""
+    with open(_GEOJSON_PATH, encoding="utf-8") as f:
+        data = json.load(f)
+    distritos = []
+    for feature in data["features"]:
+        nombre = feature["properties"]["distrito"]
+        sector = _DISTRITO_A_SECTOR.get(nombre)
+        if sector is None:
+            continue  # Callao u otro distrito no mapeado
+        distritos.append((sector, feature["geometry"]["coordinates"]))
+    return distritos
+
+
+# Polígonos por sector "a mano" (SECTORES) reemplazados por los 43
+# distritos reales del IGN — se guarda una sola vez al importar el módulo,
+# el costo de evaluar ~72k vértices por punto es trivial para instancias
+# de cientos de clientes.
+_DISTRITOS = _cargar_distritos()
+
+# Nombres de sectores disponibles (para callers que iteraban SECTORES.keys()).
+SECTORES: List[str] = ["Lima Norte", "Lima Este", "Lima Sur", "Lima Centro"]
+SECTOR_POR_DISTRITO: Dict[str, str] = dict(_DISTRITO_A_SECTOR)
+
+
+def _point_in_ring(x: float, y: float, ring: List[List[float]]) -> bool:
+    """Ray casting estándar: True si (x, y) cae dentro de `ring`."""
     inside = False
-    n = len(polygon)
+    n = len(ring)
     j = n - 1
     for i in range(n):
-        xi, yi = polygon[i].x, polygon[i].y
-        xj, yj = polygon[j].x, polygon[j].y
+        xi, yi = ring[i][0], ring[i][1]
+        xj, yj = ring[j][0], ring[j][1]
         intersects = ((yi > y) != (yj > y)) and (
             x < (xj - xi) * (y - yi) / (yj - yi) + xi
         )
@@ -51,15 +80,26 @@ def _point_in_polygon(point: Coordinate, polygon: List[Coordinate]) -> bool:
     return inside
 
 
+def _point_in_multipolygon(x: float, y: float, multipolygon: List) -> bool:
+    """True si (x, y) cae dentro de alguno de los polígonos del distrito
+    (islas/exclaves incluidos), respetando huecos (rings != el primero)."""
+    for polygon in multipolygon:
+        if _point_in_ring(x, y, polygon[0]) and not any(
+            _point_in_ring(x, y, hueco) for hueco in polygon[1:]
+        ):
+            return True
+    return False
+
+
 def assign_sector(coord: Coordinate) -> str:
-    """Sector geográfico al que pertenece `coord` (RN-028). Si no cae en
-    ninguno de los 4 polígonos, cae en Lima Centro (fallback) — sin esto,
-    un pedido en el borde de la ciudad quedaría sin sector asignado."""
-    for nombre, polygon in SECTORES.items():
-        if nombre == _SECTOR_FALLBACK:
-            continue
-        if _point_in_polygon(coord, polygon):
-            return nombre
+    """Sector geográfico al que pertenece `coord` (RN-028), resuelto contra
+    los límites distritales reales de Lima Metropolitana (IGN). Si no cae
+    en ninguno de los 43 distritos mapeados (incluye estar en Callao, sin
+    sector propio, o fuera de Lima), cae en Lima Centro (fallback) — sin
+    esto, un pedido en el borde de la ciudad quedaría sin sector asignado."""
+    for sector, multipolygon in _DISTRITOS:
+        if _point_in_multipolygon(coord.x, coord.y, multipolygon):
+            return sector
     return _SECTOR_FALLBACK
 
 
