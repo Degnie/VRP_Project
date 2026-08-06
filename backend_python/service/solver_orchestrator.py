@@ -456,11 +456,68 @@ def _clients_to_postpone_for_8h(ruta: Ruta, instance: Instancia, used_osrm: bool
     return a_postergar
 
 
+def _reduce_vehicle_capacity_for_8h(
+    flota: Flota, over_8h: List[Ruta], durations: Dict[int, float], num_rutas_usadas: int
+) -> Flota:
+    """Reduce la capacidad efectiva de los vehículos sobre 8h Y de los
+    vehículos TODAVÍA sin ruta que comparten esa misma capacidad grande,
+    proporcional al exceso de horas — para forzar al solver a cortar esa
+    ruta antes y repartir hacia varios vehículos ociosos de una sola vez,
+    no de a uno por vuelta.
+
+    RN-026 (fix de fondo): el solver base (CVRP puro, sin noción de tiempo
+    — ver SPEC "Fuera de Alcance") arma rutas por distancia+peso, sin mirar
+    cuántos vehículos quedan disponibles. Con una flota grande (ej. 15
+    vehículos: 7 camiones de 1500kg + 8 motos de 30kg) y demanda total que
+    cabe en un solo camión, el greedy metía los 172 clientes en 1 sola
+    ruta de 65h y dejaba 14 vehículos sin ningún cliente asignado — la
+    versión anterior de este fix posteraba 147 clientes "al día siguiente"
+    en vez de usar la flota ociosa que sí estaba disponible hoy.
+
+    Bug real de una versión intermedia: reducir solo el vehículo que ya
+    excedía 8h en ESA vuelta liberaba 1 vehículo nuevo por vuelta del
+    bucle (mismo patrón "de a 1" ya visto en la postergación) — con 7
+    camiones de 1500kg, se necesitaban ~7 vueltas solo para tocar cada
+    uno, agotando MAX_REINTENTOS_ORQUESTACION antes de converger. Ahora
+    también se reduce, en la misma pasada, a todo vehículo sin ruta
+    todavía cuya capacidad iguale o supere la del que sí excedió — así la
+    primera reducción ya "achica" a todos los camiones grandes de una vez.
+    """
+    capacidades = list(
+        flota.capacidades_vehiculos or ([flota.capacidad_por_vehiculo] * flota.num_vehiculos)
+    )
+    vehicle_ids_over = {r.vehicle_id for r in over_8h}
+    for ruta in over_8h:
+        factor = max(0.05, 8.0 / durations[ruta.vehicle_id])
+        idx_origen = ruta.vehicle_id % len(capacidades)
+        capacidad_origen = capacidades[idx_origen]
+        capacidades[idx_origen] = max(1.0, capacidad_origen * factor)
+        for idx in range(len(capacidades)):
+            # Vehículos ya usados en esta solución (con ruta propia,
+            # aunque no haya excedido 8h) no se tocan — solo los que
+            # todavía no tienen ninguna ruta asignada, comparando contra
+            # la capacidad ORIGINAL (antes de esta reducción) del que sí
+            # excedió, para no encadenar reducciones sobre reducciones ya
+            # aplicadas en esta misma pasada.
+            if idx >= num_rutas_usadas and idx not in vehicle_ids_over:
+                if capacidades[idx] >= capacidad_origen:
+                    capacidades[idx] = max(1.0, capacidades[idx] * factor)
+    return Flota(
+        num_vehiculos=flota.num_vehiculos,
+        capacidad_por_vehiculo=capacidades[0],
+        capacidades_vehiculos=capacidades,
+    )
+
+
 def solve_instance_with_retries(instance: Instancia) -> Tuple[Solucion, bool, List[int]]:
     """Resuelve una instancia aplicando la orquestación VRPTW de RN-026/
-    RN-027: si alguna ruta excede 8h, poster­ga el cliente más lejano de esa
-    ruta y reintenta; si alguna ruta toma menos de 5h con flota de sobra,
-    reduce en 1 el número de vehículos y reintenta. Máximo
+    RN-027: si alguna ruta excede 8h y hay vehículos de la flota sin
+    ninguna ruta asignada, se reduce la capacidad efectiva del vehículo
+    sobrecargado para forzar que el solver reparta hacia esos vehículos
+    ociosos en el siguiente intento. Solo se posterga clientes (fuera de
+    la instancia, "al día siguiente") cuando la flota entera ya está en
+    uso y aun así sobra. Si alguna ruta toma menos de 5h con flota de
+    sobra, se reduce el número de vehículos y se reintenta. Máximo
     MAX_REINTENTOS_ORQUESTACION intentos — si no converge, se queda con la
     última solución obtenida en vez de ciclar indefinidamente.
 
@@ -473,7 +530,18 @@ def solve_instance_with_retries(instance: Instancia) -> Tuple[Solucion, bool, Li
     used_osrm = False
 
     for _ in range(config.MAX_REINTENTOS_ORQUESTACION):
-        solution, used_osrm = solve_instance(current_instance)
+        try:
+            solution, used_osrm = solve_instance(current_instance)
+        except ValueError:
+            # RN-013: una reducción de capacidad de la vuelta anterior fue
+            # demasiado agresiva y fragmentó la ruta en más subrutas de las
+            # que hay vehículos disponibles — la excepción no es un error
+            # real del pedido del usuario, es un efecto secundario de esta
+            # orquestación heurística. Se descarta ese intento y se queda
+            # con la última solución válida en vez de propagar un 500.
+            if solution is None:
+                raise
+            break
         durations = {
             ruta.vehicle_id: _route_duration_hours(ruta, current_instance, used_osrm)
             for ruta in solution.rutas
@@ -481,6 +549,34 @@ def solve_instance_with_retries(instance: Instancia) -> Tuple[Solucion, bool, Li
 
         over_8h = [r for r in solution.rutas if durations[r.vehicle_id] > 8.0]
         if over_8h:
+            vehiculos_sin_ruta = current_instance.flota.num_vehiculos - len(solution.rutas)
+            if vehiculos_sin_ruta > 0:
+                # Hay flota ociosa: forzar reparto hacia ella reduciendo la
+                # capacidad efectiva del/los vehículo(s) sobrecargados, sin
+                # tocar la lista de clientes de la instancia.
+                nueva_flota = _reduce_vehicle_capacity_for_8h(
+                    current_instance.flota, over_8h, durations, len(solution.rutas)
+                )
+                try:
+                    current_instance = Instancia(
+                        id=current_instance.id,
+                        deposito=current_instance.deposito,
+                        flota=nueva_flota,
+                        clientes=current_instance.clientes,
+                        created_at=current_instance.created_at,
+                    )
+                except ValueError:
+                    # Reducir capacidad para forzar el reparto dejó la
+                    # flota sin espacio total para la demanda (RN-005) —
+                    # la reducción fue demasiado agresiva en esta pasada;
+                    # cae al camino de postergar en vez de perder la
+                    # solución actual entera.
+                    pass
+                else:
+                    continue
+
+            # Toda la flota ya está en uso y aun así sobra: recién acá
+            # postergar tiene sentido (no hay más vehículos hoy).
             # Postergar TODOS los clientes que sobran de TODAS las rutas
             # que exceden 8h en este mismo intento (no solo 1 cliente de 1
             # ruta) — con instancias grandes, postergar de a 1 por vuelta
