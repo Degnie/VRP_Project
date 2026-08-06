@@ -7,6 +7,56 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ---
 
+## [Unreleased] — Fix: reparto de flota por sector según cantidad de clientes, no peso (SPEC v1.10)
+
+### 🐛 Fix sobre RN-029 (métrica de reparto)
+
+Bug real reportado en uso real: 2 camiones + 2 furgonetas contra
+`clientes_lima_100_sectorizado.csv` (100 pedidos, 25 por sector)
+reprogramaba ~44-46 pedidos. Causa raíz: `split_fleet_by_sector` repartía
+el resto de la flota (tras el piso de 1 vehículo por sector) proporcional
+a la DEMANDA DE PESO — pero RN-026 estima el tiempo de una ruta por
+CANTIDAD DE PARADAS (~15min fijos c/u + conducción), no por peso
+transportado. Un sector con muchos clientes de poco peso individual podía
+recibir menos flota que uno con pocos clientes de mucho peso, cuando es
+justo al revés lo que necesita para no exceder las 8h.
+
+#### RN-029 modificada
+- El reparto proporcional del resto de la flota (tras el piso de 1
+  vehículo por sector con clientes > 0) ahora se calcula sobre la
+  CANTIDAD DE CLIENTES de cada sector, no sobre la demanda de peso.
+- La validación de exceso de PESO por sector (recorte vía
+  `_trim_clients_to_fleet_capacity`, delta anterior) no cambia — solo
+  cambia qué métrica decide cuántos vehículos recibe cada sector.
+
+#### Nota de alcance (confirmada con el usuario)
+- Este fix mejora escenarios DESBALANCEADOS (un sector con muchos
+  clientes chicos vs. otro con pocos clientes grandes). NO resuelve el
+  caso donde los 4 sectores tienen exactamente la misma cantidad de
+  clientes y la flota total es 1:1 con la cantidad de sectores — ahí
+  ningún criterio de reparto puede darle más de 1 vehículo a cada sector,
+  y una reprogramación alta es un límite real de flota insuficiente para
+  el volumen del día, no un bug de reparto.
+
+#### Investigado, sin cambio de código
+- "Rutas creadas pero no pintadas en el mapa": no se pudo reproducir tras
+  revisión exhaustiva del código (mapeo de ids cliente↔coordenada, fetch
+  de geometría OSRM, orden de estado `instance`/`solution` en
+  `RouteMap.tsx`); el usuario confirmó que se resolvió solo tras recargar
+  — probablemente caché stale del navegador o reload pendiente del
+  backend en el momento del reporte, no un bug de código.
+
+#### Datos de ejemplo corregidos (no código)
+- `clientes_lima_100/200/300_sectorizado.csv`: regenerados y validados
+  contra OSRM `/nearest` (0 puntos a más de 150m de una vía real) — la
+  versión anterior (sesión previa) tenía hasta 189/300 puntos en zonas
+  sin acceso vial real (cerros, fuera de cobertura de calles), causa del
+  punto "puntos de entrega en el mar / zonas no accesibles" reportado.
+- `clientes_lima_50.csv`: corregidos 4 puntos menores (150-730m de vía),
+  de una sesión anterior.
+
+---
+
 ## [Unreleased] — Fix: piso mínimo de flota por sector y exceso de demanda sectorial (SPEC v1.9)
 
 ### 🐛 Fix sobre RN-029 (sectorización)
