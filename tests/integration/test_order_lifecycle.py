@@ -483,12 +483,12 @@ class TestOrderLifecycle:
         import backend_python.api as api_module
         original_solve_instance = api_module.solve_instance_sectorized
 
-        def racing_solve_instance(instance):
+        def racing_solve_instance(instance, force_include_ids=None):
             delete_response = client.delete(
                 f"/instances/{instancia_id}", headers={"Authorization": f"Bearer {owner_token}"}
             )
             assert delete_response.status_code == 200
-            return original_solve_instance(instance)
+            return original_solve_instance(instance, force_include_ids=force_include_ids)
 
         with patch.object(api_module, "solve_instance_sectorized", racing_solve_instance):
             response = client.post(
@@ -981,6 +981,72 @@ class TestOrderLifecycle:
         assert response.status_code == 200
         assert response.json()["rescheduled_client_ids"] == [2]
 
+    def test_reschedule_writes_client_to_reprogramados_csv(self, tmp_path, monkeypatch):
+        """RN-031: cerrar jornada vía reschedule agrega el pedido no-terminal
+        al CSV de reprogramados de la cuenta, con prioridad 1.
+
+        spec: RN-031
+        """
+        from backend_python.config import config as global_config
+        monkeypatch.setattr(global_config, "REPROGRAMADOS_DIR", str(tmp_path))
+
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle Reprog CSV")
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_token, instancia_id)
+
+        client.put(
+            f"/instances/{instancia_id}/clients/1/status",
+            json={"status": "entregado"},
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        client.put(
+            f"/instances/{instancia_id}/clients/2/status",
+            json={"status": "rechazado"},
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        client.post(f"/instances/{instancia_id}/reschedule", headers={"Authorization": f"Bearer {owner_token}"})
+
+        pending = client.get(
+            "/reprogramados/pending", headers={"Authorization": f"Bearer {owner_token}"}
+        )
+        assert pending.status_code == 200
+        assert pending.json()["count"] == 1
+        assert pending.json()["clients"][0]["cliente_id"] == 2
+        assert pending.json()["clients"][0]["priority"] == 1
+        assert pending.json()["clients"][0]["force_include"] is False
+
+    def test_merge_reprogramados_returns_full_snapshot(self, tmp_path, monkeypatch):
+        """POST /reprogramados/merge devuelve coordenadas/demanda/contacto
+        completos, no solo el id — necesario para reconstruir el pedido en
+        la instancia nueva sin depender de la instancia original."""
+        from backend_python.config import config as global_config
+        monkeypatch.setattr(global_config, "REPROGRAMADOS_DIR", str(tmp_path))
+
+        client = self._client()
+        owner_token = self._register_owner(client, "Lifecycle Reprog Merge")
+        instancia_id = f"lc-{uuid.uuid4().hex[:8]}"
+        self._solve_instance(client, owner_token, instancia_id)
+        client.put(
+            f"/instances/{instancia_id}/clients/2/status",
+            json={"status": "rechazado"},
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        client.post(f"/instances/{instancia_id}/reschedule", headers={"Authorization": f"Bearer {owner_token}"})
+
+        response = client.post(
+            "/reprogramados/merge",
+            json={"cliente_ids": [2]},
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        assert response.status_code == 200
+        clients = response.json()["clients"]
+        assert len(clients) == 1
+        assert clients[0]["id"] == 2
+        assert clients[0]["x"] == 20
+        assert clients[0]["y"] == 20
+        assert clients[0]["demand"] == 10
+
     def test_invalid_status_rejected(self):
         client = self._client()
         owner_token = self._register_owner(client, "Lifecycle B")
@@ -1300,14 +1366,14 @@ class TestOrderLifecycle:
 
         original_solve_instance = api_module.solve_instance_sectorized
 
-        def racing_solve_instance(instance):
+        def racing_solve_instance(instance, force_include_ids=None):
             patch_response = client.patch(
                 f"/instances/{instancia_id}/clients/1",
                 json={"x": 10.0, "y": 10.0, "address": "Dirección corregida en la carrera"},
                 headers={"Authorization": f"Bearer {owner_token}"},
             )
             assert patch_response.status_code == 200
-            return original_solve_instance(instance)
+            return original_solve_instance(instance, force_include_ids=force_include_ids)
 
         with patch.object(api_module, "solve_instance_sectorized", racing_solve_instance):
             response = client.post(

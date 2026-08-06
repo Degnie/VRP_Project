@@ -47,6 +47,7 @@ build*/
 # Data/Benchmarks
 data/large_instances/
 data/osrm/
+data/reprogramados/
 benchmarks/results/
 
 # Docs build

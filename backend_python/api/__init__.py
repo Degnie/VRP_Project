@@ -11,6 +11,7 @@ import logging
 from backend_python.config import get_config
 from backend_python.models import Coordinate, Cliente, Deposito, Flota, Instancia
 from backend_python.service.solver_orchestrator import solve_instance_sectorized
+from backend_python.service.reprogramados_csv import ReprogramadoRow, read_pending, remove as remove_reprogramados, upsert as upsert_reprogramados
 from backend_python.persistence.postgres_adapter import PostgreSQLAdapter, psycopg2
 from backend_python.persistence.mongodb_adapter import MongoDBAdapter
 from backend_python.auth import create_access_token, hash_password, verify_password
@@ -382,6 +383,24 @@ class RescheduleResponse(BaseModel):
     """Nueva instancia creada a partir de pedidos no entregados."""
     new_instancia_id: str
     rescheduled_client_ids: List[int]
+
+
+class ReprogramadoOut(BaseModel):
+    """Fila del CSV de reprogramados de la cuenta (RN-031)."""
+    cliente_id: int
+    priority: int
+    force_include: bool
+
+
+class ReprogramadosPendingResponse(BaseModel):
+    """Respuesta de GET /reprogramados/pending — conteo + detalle."""
+    count: int
+    clients: List[ReprogramadoOut]
+
+
+class ReprogramadosMergeRequest(BaseModel):
+    """IDs de reprogramados a agregar a una instancia (POST /reprogramados/merge)."""
+    cliente_ids: List[int]
 
 
 def create_app() -> FastAPI:
@@ -800,13 +819,47 @@ def create_app() -> FastAPI:
         # no pasó nada, pero la instancia ya quedó vacía. Solo se
         # persiste si el solve realmente produjo una solución.
         logger.info(f"Solving instance {log_label}")
-        solution, used_osrm, postponed_ids = solve_instance_sectorized(instance)
+        # RN-033: clientes que ya agotaron el tope de reprogramación
+        # (force_include=true en su fila del CSV de la cuenta) se fuerzan a
+        # entrar en la ruta del día aunque el resultado supere las 8h.
+        reprogramados = read_pending(config.REPROGRAMADOS_DIR, account_id)
+        force_include_ids = {r.cliente_id for r in reprogramados if r.force_include}
+        solution, used_osrm, postponed_ids = solve_instance_sectorized(
+            instance, force_include_ids=force_include_ids
+        )
         clientes_by_id = {c.id: c for c in instance.clientes}
         postponed_clients = [
             {"id": cid, "name": clientes_by_id[cid].customer_name}
             for cid in postponed_ids
             if cid in clientes_by_id
         ]
+
+        # RN-031/RN-032: todo cliente de esta instancia que quedó postergado
+        # se agrega/actualiza en el CSV de reprogramados de la cuenta, con su
+        # snapshot completo (id solo no alcanza para reconstruirlo después).
+        if postponed_ids:
+            upsert_reprogramados(
+                config.REPROGRAMADOS_DIR,
+                account_id,
+                [
+                    ReprogramadoRow(
+                        cliente_id=cid, priority=0, force_include=False,
+                        x=clientes_by_id[cid].coordenada.x, y=clientes_by_id[cid].coordenada.y,
+                        demand=clientes_by_id[cid].demanda,
+                        customer_name=clientes_by_id[cid].customer_name,
+                        customer_phone=clientes_by_id[cid].customer_phone,
+                        address=clientes_by_id[cid].address,
+                    )
+                    for cid in postponed_ids
+                    if cid in clientes_by_id
+                ],
+            )
+        # RN-034: los que sí quedaron en ruta ya no son pendientes — se
+        # limpian del CSV recién acá, tras confirmar que el solve resolvió
+        # (si el proceso se cae antes de este punto, la fila sigue en el CSV).
+        entregados_hoy = [cid for cid in clientes_by_id if cid not in postponed_ids]
+        if entregados_hoy:
+            remove_reprogramados(config.REPROGRAMADOS_DIR, account_id, entregados_hoy)
 
         if pg_adapter:
             if require_existing and not pg_adapter.load_instance(instance.id, account_id=account_id):
@@ -1657,7 +1710,64 @@ def create_app() -> FastAPI:
                     ),
                 )
 
+        # RN-031/RN-032: los pedidos movidos por cierre de jornada (estado
+        # no-terminal pendiente/no_encontrado/rechazado) también cuentan como
+        # "no entregados" para el CSV de reprogramados de la cuenta — mismo
+        # mecanismo que usa RN-026 al postponer por exceso de 8h.
+        upsert_reprogramados(
+            config.REPROGRAMADOS_DIR,
+            current_user.account_id,
+            [
+                ReprogramadoRow(
+                    cliente_id=c.id, priority=0, force_include=False,
+                    x=c.coordenada.x, y=c.coordenada.y, demand=c.demanda,
+                    customer_name=c.customer_name, customer_phone=c.customer_phone, address=c.address,
+                )
+                for c in new_clientes
+            ],
+        )
+
         return RescheduleResponse(new_instancia_id=new_visible_id, rescheduled_client_ids=moved_ids)
+
+    @app.get("/reprogramados/pending", response_model=ReprogramadosPendingResponse)
+    def get_reprogramados_pending(
+        current_user: CurrentUser = Depends(require_role("dueño", "operario")),
+    ):
+        """Cuántos pedidos reprogramados hay pendientes para la cuenta —
+        el operario lo consulta al armar la instancia del día (RN-031)."""
+        rows = read_pending(config.REPROGRAMADOS_DIR, current_user.account_id)
+        return ReprogramadosPendingResponse(
+            count=len(rows),
+            clients=[
+                ReprogramadoOut(cliente_id=r.cliente_id, priority=r.priority, force_include=r.force_include)
+                for r in rows
+            ],
+        )
+
+    @app.post("/reprogramados/merge")
+    def merge_reprogramados(
+        request: ReprogramadosMergeRequest,
+        current_user: CurrentUser = Depends(require_role("dueño", "operario")),
+    ):
+        """Devuelve el snapshot completo (coordenadas/demanda/contacto) de los
+        reprogramados pedidos, para que el operario los agregue a la
+        instancia que está armando. No borra nada del CSV acá — las filas
+        se limpian recién cuando el solve de esa instancia termina OK y el
+        cliente queda efectivamente en una ruta (RN-034), no en este paso,
+        para no perder el registro si el proceso se interrumpe entre medio."""
+        rows = read_pending(config.REPROGRAMADOS_DIR, current_user.account_id)
+        wanted = set(request.cliente_ids)
+        selected = [r for r in rows if r.cliente_id in wanted]
+        return {
+            "clients": [
+                {
+                    "id": r.cliente_id, "x": r.x, "y": r.y, "demand": r.demand,
+                    "customer_name": r.customer_name, "customer_phone": r.customer_phone,
+                    "address": r.address, "force_include": r.force_include,
+                }
+                for r in selected
+            ]
+        }
 
     @app.get("/")
     def root():

@@ -69,6 +69,12 @@ class Config:
     TIEMPO_ESPERA_POR_CLIENTE_MIN = float(os.getenv("TIEMPO_ESPERA_POR_CLIENTE_MIN", "15"))
     MAX_REINTENTOS_ORQUESTACION = int(os.getenv("MAX_REINTENTOS_ORQUESTACION", "5"))
 
+    # Reprogramación (RN-031): directorio donde se guarda un CSV de
+    # pendientes por cuenta (reprogramados_{account_id}.csv).
+    REPROGRAMADOS_DIR = os.getenv(
+        "REPROGRAMADOS_DIR", str(Path(__file__).parent.parent / "data" / "reprogramados")
+    )
+
     # OSRM (routing sobre calles reales; fallback a euclídea si no configurado o no disponible)
     # Sin default: OSRM_URL vacío significa "no usar OSRM", no "falla en runtime".
     OSRM_URL = os.getenv("OSRM_URL", "")

@@ -3,7 +3,7 @@ Orquestador: integra C++ core con validación Python.
 Ejecuta secuencia: construcción → optimización → validación.
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 import logging
 import math
 import sys
@@ -510,7 +510,9 @@ def _reduce_vehicle_capacity_for_8h(
     )
 
 
-def solve_instance_with_retries(instance: Instancia) -> Tuple[Solucion, bool, List[int]]:
+def solve_instance_with_retries(
+    instance: Instancia, force_include_ids: Optional[Set[int]] = None
+) -> Tuple[Solucion, bool, List[int]]:
     """Resuelve una instancia aplicando la orquestación VRPTW de RN-026/
     RN-027: si alguna ruta excede 8h y hay vehículos de la flota sin
     ninguna ruta asignada, se reduce la capacidad efectiva del vehículo
@@ -522,9 +524,14 @@ def solve_instance_with_retries(instance: Instancia) -> Tuple[Solucion, bool, Li
     MAX_REINTENTOS_ORQUESTACION intentos — si no converge, se queda con la
     última solución obtenida en vez de ciclar indefinidamente.
 
+    force_include_ids (RN-033): clientes que ya agotaron el tope de
+    reprogramación (RN-032) — nunca se postergan por RN-026, aunque su
+    ruta final supere las 8h.
+
     Retorna: (Solucion, used_osrm, postponed_client_ids)
     """
     config = get_config()
+    force_include_ids = force_include_ids or set()
     current_instance = instance
     postponed: List[int] = []
     solution: Optional[Solucion] = None
@@ -610,6 +617,9 @@ def solve_instance_with_retries(instance: Instancia) -> Tuple[Solucion, bool, Li
                 client_ids_a_postergar.update(
                     _clients_to_postpone_for_8h(ruta, current_instance, used_osrm)
                 )
+            # RN-033: clientes que ya agotaron el tope de reprogramación
+            # (RN-032) se fuerzan a quedar en la ruta aunque supere las 8h.
+            client_ids_a_postergar -= force_include_ids
             if not client_ids_a_postergar:
                 # Ninguna ruta sobre 8h tiene nada postergable (todas de 1
                 # solo cliente ya inviable) — caso degenerado e irresoluble
@@ -719,13 +729,18 @@ def solve_instance_with_retries(instance: Instancia) -> Tuple[Solucion, bool, Li
     return solution, used_osrm, postponed
 
 
-def solve_instance_sectorized(instance: Instancia) -> Tuple[Solucion, bool, List[int]]:
+def solve_instance_sectorized(
+    instance: Instancia, force_include_ids: Optional[Set[int]] = None
+) -> Tuple[Solucion, bool, List[int]]:
     """Resuelve una instancia dividiéndola primero en 4 sectores
     geográficos fijos de Lima Metropolitana (RN-028), repartiendo la
     flota entre ellos en proporción a su demanda de peso (RN-029), y
     corriendo la orquestación de reintentos RN-026/027 de forma
     independiente por sector (RN-030) — en vez de sobre la instancia
     completa combinada.
+
+    force_include_ids (RN-033): se propaga sin cambios a cada sub-resolución
+    por sector.
 
     Fix de fondo: el solver base es CVRP puro, sin noción de tiempo, y
     arma rutas por distancia+peso sin mirar cuántos vehículos quedan
@@ -738,6 +753,7 @@ def solve_instance_sectorized(instance: Instancia) -> Tuple[Solucion, bool, List
 
     Retorna: (Solucion combinada, used_osrm, postponed_client_ids)
     """
+    force_include_ids = force_include_ids or set()
     clientes_por_sector: Dict[str, List[Cliente]] = {nombre: [] for nombre in SECTORES}
     for cliente in instance.clientes:
         sector = assign_sector(cliente.coordenada)
@@ -771,7 +787,9 @@ def solve_instance_sectorized(instance: Instancia) -> Tuple[Solucion, bool, List
             clientes=clientes_sector,
             created_at=instance.created_at,
         )
-        sub_solution, used_osrm, postponed_sector = solve_instance_with_retries(sub_instance)
+        sub_solution, used_osrm, postponed_sector = solve_instance_with_retries(
+            sub_instance, force_include_ids=force_include_ids
+        )
         used_osrm_final = used_osrm_final or used_osrm
         todos_postponed.extend(postponed_sector)
 
