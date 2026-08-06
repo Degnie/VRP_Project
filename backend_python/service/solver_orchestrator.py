@@ -457,6 +457,36 @@ def _clients_to_postpone_for_8h(ruta: Ruta, instance: Instancia, used_osrm: bool
     return a_postergar
 
 
+def _trim_clients_to_fleet_capacity(
+    clientes: List[Cliente], capacidad_total: float, deposito: Deposito, force_include_ids: Set[int]
+) -> Tuple[List[Cliente], List[int]]:
+    """Recorta `clientes` hasta que su demanda total quepa en
+    `capacidad_total`, sacando primero a los más lejanos del depósito
+    (mismo criterio que _clients_to_postpone_for_8h). Los ids en
+    force_include_ids (RN-033) nunca se recortan — si ni así entra en
+    capacidad, el sector queda sobre-demandado y RN-013 lo resolverá (o
+    fallará) más abajo en el flujo normal, no acá.
+
+    Retorna: (clientes que sí caben, ids postergados por falta de capacidad)
+    """
+    forzados = [c for c in clientes if c.id in force_include_ids]
+    recortables = sorted(
+        (c for c in clientes if c.id not in force_include_ids),
+        key=lambda c: distancia_euclidiana(deposito.coordenada, c.coordenada),
+    )
+    demanda_forzada = sum(c.demanda for c in forzados)
+    incluidos = list(forzados)
+    demanda_acumulada = demanda_forzada
+    postergados: List[int] = []
+    for cliente in recortables:
+        if demanda_acumulada + cliente.demanda <= capacidad_total:
+            incluidos.append(cliente)
+            demanda_acumulada += cliente.demanda
+        else:
+            postergados.append(cliente.id)
+    return incluidos, postergados
+
+
 def _reduce_vehicle_capacity_for_8h(
     flota: Flota, over_8h: List[Ruta], durations: Dict[int, float], num_rutas_usadas: int
 ) -> Flota:
@@ -779,6 +809,24 @@ def solve_instance_sectorized(
             # postergados, no hay flota con la que resolverlos hoy.
             todos_postponed.extend(c.id for c in clientes_sector)
             continue
+
+        # Bug real: si la demanda del sector excede la capacidad de su
+        # sub-flota (posible aun con el piso de 1 vehículo de
+        # split_fleet_by_sector — un sector puede recibir solo 1 vehículo
+        # chico con mucha demanda), Instancia() rechazaba TODO el sector
+        # con un ValueError, sin resolver nada. Se recorta acá: los
+        # clientes que exceden la capacidad total de la sub-flota se
+        # postergan directamente (más lejanos al depósito primero, mismo
+        # criterio que _clients_to_postpone_for_8h), y se resuelve con los
+        # que sí caben. force_include_ids (RN-033) nunca se recorta.
+        demanda_sector = sum(c.demanda for c in clientes_sector)
+        if demanda_sector > flota_sector.capacidad_total:
+            clientes_sector, recortados = _trim_clients_to_fleet_capacity(
+                clientes_sector, flota_sector.capacidad_total, instance.deposito, force_include_ids
+            )
+            todos_postponed.extend(recortados)
+            if not clientes_sector:
+                continue
 
         sub_instance = Instancia(
             id=f"{instance.id}::{nombre}",

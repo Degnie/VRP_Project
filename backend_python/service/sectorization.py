@@ -96,13 +96,33 @@ def split_fleet_by_sector(
     if demanda_total <= 0:
         return {nombre: None for nombre in demanda_por_sector}
 
-    # Agrupar por tipo (capacidad idéntica) para repartir cada grupo
-    # proporcionalmente, preservando el mix real de la flota.
+    capacidades_disponibles = sorted(capacidades_todas)  # ascendente: se dona la más chica primero
+    capacidades_por_sector: Dict[str, List[float]] = {nombre: [] for nombre in demanda_por_sector}
+
+    # Piso de 1 vehículo por sector con demanda > 0 (RN-029), reservado
+    # ANTES del reparto proporcional del resto. Bug real: repartir
+    # estrictamente proporcional (math.floor) podía dejar un sector de
+    # demanda baja pero > 0 en 0 vehículos — quedaba completamente sin
+    # ruta, sus clientes se descartaban/postergaban en bloque (reportado
+    # como "Lima Este descartado"). Si la flota total no alcanza para
+    # cubrir el piso de todos los sectores con demanda, se prioriza a los
+    # de MAYOR demanda primero — el/los de menor demanda se quedan sin
+    # flota, comportamiento esperado y confirmado por el negocio.
+    sectores_con_demanda_desc = [
+        nombre for nombre, _ in sorted(demanda_por_sector.items(), key=lambda kv: kv[1], reverse=True)
+        if demanda_por_sector[nombre] > 0
+    ]
+    for nombre in sectores_con_demanda_desc:
+        if not capacidades_disponibles:
+            break
+        capacidades_por_sector[nombre].append(capacidades_disponibles.pop(0))
+
+    # Agrupar el resto por tipo (capacidad idéntica) para repartir cada
+    # grupo proporcionalmente, preservando el mix real de la flota.
     tipos: Dict[float, int] = {}
-    for cap in capacidades_todas:
+    for cap in capacidades_disponibles:
         tipos[cap] = tipos.get(cap, 0) + 1
 
-    capacidades_por_sector: Dict[str, List[float]] = {nombre: [] for nombre in demanda_por_sector}
     nombres_ordenados = sorted(demanda_por_sector.items(), key=lambda kv: kv[1], reverse=True)
 
     for capacidad, cantidad in tipos.items():
