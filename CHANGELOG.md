@@ -7,6 +7,42 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ---
 
+## [Unreleased] — Sectorización con límites distritales reales del IGN (SPEC v1.12)
+
+### 🗺️ RN-028 modificada
+
+Los 4 polígonos hardcodeados de `sectorization.py` (dados a mano, sin
+fuente verificable, causa raíz de bugs reales de sectores mezclándose y
+puntos descartados en rondas anteriores) se reemplazan por los límites
+distritales reales de Lima Metropolitana.
+
+- **Added:** `backend_python/service/data/lima_callao_distritos.geojson` —
+  GeoJSON público de `joseluisq/peru-geojson-datasets` (licencia
+  Apache-2.0, datos atribuidos al IGN — Instituto Geográfico Nacional del
+  Perú), 50 distritos (43 Lima + 7 Callao) como `MultiPolygon`.
+- **Changed:** `assign_sector()` deja de hacer ray-casting sobre 4
+  polígonos fijos de 6-8 vértices — resuelve contra los polígonos reales
+  (con islas/huecos vía `MultiPolygon`) de cada uno de los 43 distritos de
+  Lima, agrupados en los mismos 4 sectores de negocio (Norte/Este/Sur/
+  Centro) según el mapeo logístico estándar aprobado. Los 7 distritos de
+  Callao quedan sin mapear (el sistema es de Lima Metropolitana, sin
+  sector propio para Callao) — un punto ahí cae en el fallback Lima
+  Centro, igual que cualquier coordenada fuera de los 43 distritos.
+- **Changed:** `SECTORES` pasa de `Dict[str, List[Coordinate]]` (polígonos
+  a mano) a `List[str]` (solo los 4 nombres de sector) — los callers que
+  iteraban `SECTORES` (`solver_orchestrator.py`) solo usaban las claves,
+  sin cambio de comportamiento.
+- **Verificado:** los 3 CSV de ejemplo (`clientes_lima_100/200/300_
+  sectorizado.csv`) se re-evaluaron contra el nuevo `assign_sector()` —
+  0 mismatches en 603 puntos totales, ningún cliente cambia de sector.
+- **Decisión de diseño:** sin librería nueva (`shapely`/`geopandas`) —
+  ray-casting manual extendido para `MultiPolygon`/huecos, mismo enfoque
+  que el código anterior. Costo por punto sube de ~4 polígonos de 7
+  vértices a 43 distritos de ~1500 vértices promedio (72489 vértices
+  totales) — trivial para instancias de cientos de clientes.
+
+---
+
 ## [Unreleased] — Fix: rechazo global de demanda excedida y contaminación de estados por reuso de instancia_id (SPEC v1.11)
 
 ### 🐛 Fix sobre RN-005/RN-029 y RN-036 nueva
