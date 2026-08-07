@@ -95,4 +95,16 @@ PYBIND11_MODULE(vrp_solver, m) {
 
     py::class_<ThreeOpt>(m, "ThreeOpt")
         .def_static("improve", &ThreeOpt::improve);
+
+    // RN-037: relocalización inter-ruta — mueve clientes entre rutas de
+    // distintos vehículos (TwoOpt/OrOpt/ThreeOpt de arriba solo reordenan
+    // dentro de una misma ruta, nunca corrigen a qué vehículo quedó
+    // asignado un cliente tras NearestNeighbor).
+    py::class_<RelocateInterRoute>(m, "RelocateInterRoute")
+        .def_static("improve", &RelocateInterRoute::improve,
+                     py::arg("solution"),
+                     py::arg("graph"),
+                     py::arg("cost_matrix"),
+                     py::arg("capacities"),
+                     py::arg("max_passes") = 50);
 }

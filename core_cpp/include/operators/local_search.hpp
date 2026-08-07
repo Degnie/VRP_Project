@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../graph.hpp"
 #include "../solution.hpp"
 #include "../cost_matrix.hpp"
 #include <vector>
@@ -86,13 +87,44 @@ public:
     }
 
 private:
+    // Delta real de mover el segmento [i, i+seg_size) a la posición j:
+    // costo de las aristas que desaparecen (conexión al segmento en su
+    // lugar actual + la arista que quedaba "saltada" en destino) menos el
+    // costo de las aristas nuevas (segmento insertado en destino + el
+    // hueco que deja en origen). Reemplaza la versión anterior, que
+    // devolvía -1.0 fijo sin calcular nada (aceptaba cualquier movimiento
+    // como "mejora", incluyendo empeoramientos reales).
     static double compute_relocation_delta(const Route& route,
                                           const CostMatrix& costs,
                                           size_t i, size_t seg_size,
                                           size_t j) {
-        // Simplified: just return small negative to indicate improvement possible
-        // Full implementation would calculate exact edge costs
-        return -1.0;
+        size_t n = route.sequence.size();
+        size_t seg_end = i + seg_size;  // exclusivo
+
+        // i siempre > 0: el depósito ocupa la posición 0 y el loop en
+        // improve() arranca en i=0 solo si segment_size <= 0, lo cual no
+        // ocurre (segment_size >= 1 desde el primer for). El primer nodo
+        // movible es índice 1, así que route.sequence[i-1] siempre es válido.
+        int before_seg = route.sequence[i - 1];
+        int seg_first = route.sequence[i];
+        int seg_last = route.sequence[seg_end - 1];
+        int after_seg = route.sequence[seg_end < n ? seg_end : n - 1];
+
+        double removed = costs.get_cost(before_seg, seg_first) +
+                          costs.get_cost(seg_last, after_seg);
+        double closed_gap = costs.get_cost(before_seg, after_seg);
+
+        int dest_before = route.sequence[j];
+        int dest_after = route.sequence[j + 1 < n ? j + 1 : n - 1];
+
+        double opened_gap = costs.get_cost(dest_before, dest_after);
+        double inserted = costs.get_cost(dest_before, seg_first) +
+                           costs.get_cost(seg_last, dest_after);
+
+        double old_cost = removed + opened_gap;
+        double new_cost = closed_gap + inserted;
+
+        return new_cost - old_cost;
     }
 
     static void relocate_segment(Route& route, const CostMatrix& costs,
@@ -120,6 +152,110 @@ private:
             route.cost += costs.get_cost(route.sequence[k],
                                         route.sequence[k + 1]);
         }
+    }
+};
+
+// RN-037: relocalización de clientes ENTRE rutas de distintos vehículos.
+// NN (nearest_neighbor.hpp) asigna cada cliente a un vehículo de forma
+// greedy e irreversible; SA (two_opt_move) y ThreeOpt/OrOpt de arriba solo
+// reordenan la secuencia DENTRO de una ruta ya fijada. Ninguno de los pasos
+// previos puede corregir una asignación de vehículo subóptima: un cliente
+// aislado y lejano puede quedar "pegado" a la ruta de un vehículo grande
+// que lo alcanzó por casualidad durante NN, mientras un cluster de
+// clientes cercanos entre sí queda repartido entre rutas sin espacio para
+// consolidarlos. RelocateInterRoute prueba mover cada cliente de su ruta
+// actual a cada posición de cada otra ruta, aplicando el primer movimiento
+// que (a) respeta la capacidad del vehículo destino y (b) reduce el costo
+// total combinado de ambas rutas.
+class RelocateInterRoute {
+public:
+    // First-improvement: aplica repetidamente hasta que una pasada completa
+    // no encuentre ningún movimiento que mejore, o se alcance max_passes
+    // (evita loops en configuraciones degeneradas de costo empatado).
+    static bool improve(Solution& solution, const Graph& graph,
+                        const CostMatrix& costs,
+                        const std::vector<double>& capacities,
+                        int max_passes = 50) {
+        bool improved_ever = false;
+        bool improved_this_pass = true;
+        int passes = 0;
+
+        while (improved_this_pass && passes < max_passes) {
+            improved_this_pass = try_one_relocation(solution, graph, costs, capacities);
+            improved_ever = improved_ever || improved_this_pass;
+            passes++;
+        }
+
+        return improved_ever;
+    }
+
+private:
+    static double route_load(const Route& route, const Graph& graph) {
+        double load = 0.0;
+        for (int node : route.sequence) {
+            load += graph.get_node(node).demand;
+        }
+        return load;
+    }
+
+    static void recalculate_cost(Route& route, const CostMatrix& costs) {
+        route.cost = 0.0;
+        for (size_t k = 0; k + 1 < route.sequence.size(); ++k) {
+            route.cost += costs.get_cost(route.sequence[k], route.sequence[k + 1]);
+        }
+    }
+
+    // Busca UN movimiento cliente->otra-ruta que mejore el costo total;
+    // lo aplica y retorna true en cuanto lo encuentra (first-improvement,
+    // mismo estilo que TwoOpt/ThreeOpt/OrOpt de este archivo).
+    static bool try_one_relocation(Solution& solution, const Graph& graph,
+                                   const CostMatrix& costs,
+                                   const std::vector<double>& capacities) {
+        for (size_t src_idx = 0; src_idx < solution.routes.size(); ++src_idx) {
+            Route& src = solution.routes[src_idx];
+            // sequence = [depot, ..., depot]; solo posiciones 1..size-2 son clientes.
+            if (src.sequence.size() < 3) continue;
+
+            for (size_t pos = 1; pos + 1 < src.sequence.size(); ++pos) {
+                int client = src.sequence[pos];
+                int client_demand = graph.get_node(client).demand;
+
+                int prev = src.sequence[pos - 1];
+                int next = src.sequence[pos + 1];
+                double removed_cost = costs.get_cost(prev, client) + costs.get_cost(client, next);
+                double closed_gap = costs.get_cost(prev, next);
+                double src_delta_if_removed = closed_gap - removed_cost;
+
+                for (size_t dst_idx = 0; dst_idx < solution.routes.size(); ++dst_idx) {
+                    if (dst_idx == src_idx) continue;
+                    Route& dst = solution.routes[dst_idx];
+
+                    double dst_capacity = capacities[dst.vehicle_id % capacities.size()];
+                    if (route_load(dst, graph) + client_demand > dst_capacity) continue;
+
+                    for (size_t insert_pos = 0; insert_pos + 1 < dst.sequence.size(); ++insert_pos) {
+                        int dest_before = dst.sequence[insert_pos];
+                        int dest_after = dst.sequence[insert_pos + 1];
+
+                        double opened_gap = costs.get_cost(dest_before, dest_after);
+                        double inserted_cost = costs.get_cost(dest_before, client) +
+                                                costs.get_cost(client, dest_after);
+                        double dst_delta_if_inserted = inserted_cost - opened_gap;
+
+                        double total_delta = src_delta_if_removed + dst_delta_if_inserted;
+
+                        if (total_delta < -1e-6) {
+                            src.sequence.erase(src.sequence.begin() + pos);
+                            dst.sequence.insert(dst.sequence.begin() + insert_pos + 1, client);
+                            recalculate_cost(src, costs);
+                            recalculate_cost(dst, costs);
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
     }
 };
 
