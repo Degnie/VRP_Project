@@ -102,20 +102,23 @@ lista de inputs expandidos.
 Depósito en el Cercado de Lima + clientes repartidos en partes iguales entre los 4
 sectores geográficos reales del sistema (Lima Norte, Lima Este, Lima Sur, Lima Centro —
 ver `backend_python/service/sectorization.py`), 100/200/300 clientes respectivamente.
-Cada coordenada fue generada y validada contra `assign_sector()` para caer exactamente
-dentro del polígono de su sector (0 mismatches confirmados) — a diferencia de un CSV
-anterior (`clientes_lima_4sectores.csv`, eliminado) cuyas coordenadas de "Lima Este" no
-coincidían con el polígono real del sistema y terminaban cayendo en Lima Norte/Centro.
+Regenerados desde cero (v2) tras el cambio de sectorización a distritos reales del IGN:
+cada coordenada se muestreó dentro de un distrito urbano/denso del sector correspondiente
+(se excluyen distritos periféricos con poca cobertura vial: Ancón, Santa Rosa, Pucusana,
+Punta Negra/Hermosa, Santa María del Mar, San Bartolo, Cieneguilla, Lurín, Pachacámac),
+validada contra `assign_sector()` real (0 mismatches) y contra OSRM `/nearest` (descarta
+cualquier punto a más de 150 m de una calle real, re-muestreando hasta encontrar uno
+válido) — sin puntos en el mar, cerros sin acceso u otras zonas inalcanzables.
 
 `cliente_id` sigue el patrón `{Sector}-{NN}` (ej. `LimaEste-07`) para identificar
 visualmente a qué sector pertenece cada fila al revisar el archivo o el resultado de la
 ruta. Columnas: `cliente_id,x,y,peso_kg,nombre,telefono,direccion` (mismo formato que
 `clientes_lima_contacto.csv`). Pesos entre 2–25 kg por pedido.
 
-- 100 clientes (25 por sector), peso total = 1446 kg.
-- 200 clientes (50 por sector), peso total = 2889 kg.
-- 300 clientes (75 por sector), peso total = 4015 kg.
+- 100 clientes (25 por sector), peso total = 1366 kg.
+- 200 clientes (50 por sector), peso total = 2753 kg.
+- 300 clientes (75 por sector), peso total = 4226 kg.
 
 Útiles para probar RN-028/029/030 (sectorización + reparto de flota + orquestación por
 sector) con volúmenes representativos de operación real, sin el riesgo de coordenadas
-desalineadas con los polígonos reales.
+desalineadas con los polígonos/distritos reales.
