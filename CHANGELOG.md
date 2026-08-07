@@ -7,6 +7,72 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ---
 
+## [Unreleased] — Relocalización inter-ruta y ruido de precisión OSRM (SPEC v1.13)
+
+### 🔀 RN-037 nueva: relocalización inter-ruta
+
+Bug real reportado en producción, probando `clientes_lima_300_sectorizado.csv`
+con 2 camiones + 3 furgonetas: rutas mal armadas — un vehículo dejaba un
+cluster cercano de ~25 pedidos sin visitar mientras otro vehículo se
+alargaba a una zona lejana por solo 3 pedidos, o un vehículo entero se
+dedicaba a un único cliente aislado.
+
+Causa raíz: el pipeline NN → SA (2-opt) → 3-opt comparte un defecto
+estructural — ninguno de los 3 pasos mueve clientes ENTRE rutas de
+vehículos distintos. `NearestNeighbor` asigna cada cliente a un vehículo
+de forma greedy e irreversible (el más cercano al punto actual, sin
+límite de radio/cluster); `SimulatedAnnealing.two_opt_move` y
+`ThreeOpt::improve` solo reordenan la secuencia DENTRO de una ruta ya
+fijada. El operador `OrOpt` (el único candidato a mover clientes) nunca
+se invocaba desde el orquestador y además tenía su cálculo de mejora
+hardcodeado a `-1.0` (comentario propio: "Simplified... Full
+implementation would calculate exact edge costs").
+
+- **Added:** `RelocateInterRoute` (`core_cpp/include/operators/local_search.hpp`)
+  — paso final tras 3-opt que prueba mover cada cliente a cada posición de
+  cada otra ruta con capacidad disponible, aplicando el primer movimiento
+  (first-improvement) que reduce el costo total combinado. Respeta
+  estrictamente la capacidad del vehículo destino; nunca empeora la
+  solución (es puramente opcional).
+- **Fixed:** `OrOpt::compute_relocation_delta` — reemplaza el `-1.0`
+  hardcodeado por el cálculo real de delta de costo (aristas que
+  desaparecen en origen vs. aristas nuevas en destino).
+- **Changed:** `solver_orchestrator.py::_solve_cpp_pipeline` invoca
+  `RelocateInterRoute.improve()` como paso 4, después de 3-opt.
+- **Verificado:** con `clientes_lima_300_sectorizado.csv` sectorizado
+  (Lima Norte, capacidad ajustada para forzar múltiples rutas), el costo
+  tras 3-opt bajó de 304,709.8 a 285,034.7 solo con este paso — 6.5% de
+  mejora adicional que SA/3-opt no podían alcanzar por su cuenta.
+- **Added:** `core_cpp/tests/test_local_search.cpp` — primer test C++
+  para este archivo (3 casos: reubicación real, respeto de capacidad, sin
+  mejora cuando ya es óptimo).
+
+### 🐛 Fix: ruido de precisión de OSRM tumbaba sectores completos
+
+Bloqueaba la verificación del fix de arriba: al reproducir el escenario
+reportado, `CostMatrix.set_costs_bulk` (RN-008, costo ≥ 0) rechazaba con
+`ValueError` sectores enteros porque OSRM devolvía un residual negativo
+ínfimo (ej. `-0.3` metros) para pares de coordenadas muy cercanas entre sí
+(snap al mismo nodo vial) — no un error real, sino ruido de redondeo
+interno de OSRM que debería haber sido `0.0` exacto.
+
+- **Added:** `osrm_client.py::_clamp_negative_noise` — cualquier valor
+  negativo con magnitud > -1.0 metro se clampea a `0.0` antes de llegar a
+  `CostMatrix`. Un negativo de magnitud real (ej. -500m) sigue
+  propagándose tal cual, preservando RN-008 como red de seguridad ante un
+  error genuino de OSRM.
+
+### ⚠️ Warning nuevo: fallback Python sin optimización inter-ruta
+
+`_solve_python_fallback` (Nearest Neighbor puro, usado cuando los
+bindings C++ no cargan) no tiene SimulatedAnnealing, 3-opt ni
+RelocateInterRoute — corre con el bug real que RN-037 corrige. Se agregó
+un `logger.warning` explícito al importar `solver_orchestrator` si
+`HAS_CPP_BINDINGS` es `False`, para que este modo degradado nunca pase
+inadvertido en producción.
+
+---
+
 ## [Unreleased] — Sectorización con límites distritales reales del IGN (SPEC v1.12)
 
 ### 🗺️ RN-028 modificada
