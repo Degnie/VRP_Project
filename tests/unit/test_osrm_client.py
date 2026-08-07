@@ -73,6 +73,63 @@ def test_osrm_matrix_rejects_null_distance_cell():
             )
 
 
+def test_osrm_matrix_clamps_negligible_negative_noise_to_zero():
+    """Bug real: dos coordenadas muy cercanas entre sí (snap al mismo nodo
+    vial) pueden hacer que OSRM devuelva un residual negativo ínfimo (ej.
+    -0.3 metros) en vez de exactamente 0.0, por redondeo interno del
+    cálculo de ruta de OSRM — no es un error real, es ruido de precisión.
+    CostMatrix.set_costs_bulk (C++) rechaza CUALQUIER negativo (RN-008),
+    así que sin clampear esto la resolución de todo el sector fallaba con
+    ValueError aunque las coordenadas fueran perfectamente válidas.
+
+    spec: RN-MAT-001
+    """
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "code": "Ok",
+        "distances": [[0.0, -0.3], [-0.3, 0.0]],
+        "sources": [{"distance": 0.0}, {"distance": 0.0}],
+        "destinations": [{"distance": 0.0}, {"distance": 0.0}],
+    }
+    mock_response.raise_for_status.return_value = None
+
+    with patch("requests.get", return_value=mock_response):
+        matrix = get_osrm_matrix(
+            [(-77.03, -12.05), (-77.02, -12.04)],
+            base_url="http://localhost:59999",
+            max_table_size=100,
+            timeout_seconds=1,
+        )
+
+    assert matrix[0][1] == 0.0
+    assert matrix[1][0] == 0.0
+
+
+def test_osrm_matrix_preserves_significant_negative_distance():
+    """Un negativo de magnitud real (no ruido de precisión) NO debe
+    clampearse silenciosamente — debe seguir llegando tal cual hasta
+    CostMatrix, que lo rechaza (RN-008) como red de seguridad ante un
+    error real de OSRM, no un problema de redondeo."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "code": "Ok",
+        "distances": [[0.0, -500.0], [-500.0, 0.0]],
+        "sources": [{"distance": 0.0}, {"distance": 0.0}],
+        "destinations": [{"distance": 0.0}, {"distance": 0.0}],
+    }
+    mock_response.raise_for_status.return_value = None
+
+    with patch("requests.get", return_value=mock_response):
+        matrix = get_osrm_matrix(
+            [(-77.03, -12.05), (-77.02, -12.04)],
+            base_url="http://localhost:59999",
+            max_table_size=100,
+            timeout_seconds=1,
+        )
+
+    assert matrix[0][1] == -500.0
+
+
 @pytest.mark.skipif(not OSRM_AVAILABLE, reason="OSRM not configured")
 class TestOSRMIntegration:
     """Tests contra un servicio OSRM real."""

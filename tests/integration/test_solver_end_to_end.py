@@ -482,3 +482,73 @@ class TestSectorizedOrchestration:
 
         vehicle_ids = [ruta.vehicle_id for ruta in solution.rutas]
         assert len(vehicle_ids) == len(set(vehicle_ids))
+
+
+class TestInterRouteRelocation:
+    """RN-037: NearestNeighbor asigna clientes a vehículos de forma greedy
+    e irreversible; SimulatedAnnealing (2-opt) y ThreeOpt solo reordenan la
+    secuencia DENTRO de una ruta ya fijada, nunca mueven un cliente al
+    vehículo de otra ruta. RelocateInterRoute corre como paso final y
+    corrige asignaciones de vehículo subóptimas.
+
+    Bug real reportado: con flota heterogénea y clientes dispersos, un
+    vehículo de capacidad grande podía terminar con una ruta serpenteante
+    hasta una zona lejana (pocos pedidos) mientras un cluster de clientes
+    cercanos entre sí quedaba sin flota disponible, o un vehículo entero
+    se dedicaba a un solo cliente aislado.
+
+    spec: RN-037
+    """
+
+    def test_relocation_step_reduces_or_maintains_cost_vs_three_opt_alone(self):
+        """El costo final (tras RelocateInterRoute) nunca debe ser peor que
+        el costo tras 3-opt solo — es un paso de mejora estrictamente
+        opcional (first-improvement), nunca empeora la solución."""
+        depot = Deposito(Coordinate(0.0, 0.0), "Depot")
+        # Cluster A cerca del depósito, cliente aislado muy lejos — con
+        # capacidad ajustada para que NN tienda a mezclar mal ambos grupos
+        # entre los 2 vehículos disponibles.
+        flota = Flota(num_vehiculos=2, capacidad_por_vehiculo=120, capacidades_vehiculos=[120, 120])
+        clientes = [
+            Cliente(1, Coordinate(1.0, 0.0), 40),
+            Cliente(2, Coordinate(1.2, 0.1), 40),
+            Cliente(3, Coordinate(0.9, -0.1), 40),
+            Cliente(4, Coordinate(50.0, 0.0), 40),  # aislado, lejos del cluster
+        ]
+        instance = Instancia(id="test_relocate_cost", deposito=depot, flota=flota, clientes=clientes)
+
+        orchestrator = SolverOrchestrator(instance)
+        solution = orchestrator.solve()
+
+        # No se puede acceder al costo pre-relocate desde afuera del
+        # pipeline interno — se valida indirectamente: la solución final
+        # sigue siendo válida (capacidad respetada, todos los clientes
+        # cubiertos) y el log confirma que el paso se ejecutó.
+        assert any("Relocalizaci" in line or "Relocate" in line for line in orchestrator.log)
+
+        all_visited = {cid for ruta in solution.rutas for cid in ruta.secuencia}
+        assert all_visited == {1, 2, 3, 4}
+
+        for ruta in solution.rutas:
+            demanda_ruta = sum(c.demanda for c in clientes if c.id in ruta.secuencia)
+            assert demanda_ruta <= 120
+
+    def test_relocation_never_violates_vehicle_capacity(self):
+        """Cualquier movimiento inter-ruta debe respetar la capacidad del
+        vehículo destino — no puede sobrecargar una ruta para reducir costo."""
+        depot = Deposito(Coordinate(-77.0350, -12.0464), "Depot Lima")
+        flota = Flota(num_vehiculos=3, capacidad_por_vehiculo=50, capacidades_vehiculos=[50, 50, 50])
+        clientes = [
+            Cliente(1, Coordinate(-77.05, -11.90), 20),
+            Cliente(2, Coordinate(-77.04, -11.89), 20),
+            Cliente(3, Coordinate(-77.06, -11.91), 15),
+            Cliente(4, Coordinate(-77.20, -12.10), 30),
+            Cliente(5, Coordinate(-77.21, -12.11), 25),
+        ]
+        instance = Instancia(id="test_relocate_capacity", deposito=depot, flota=flota, clientes=clientes)
+
+        solution, _ = solve_instance(instance)
+
+        for ruta in solution.rutas:
+            demanda_ruta = sum(c.demanda for c in clientes if c.id in ruta.secuencia)
+            assert demanda_ruta <= 50

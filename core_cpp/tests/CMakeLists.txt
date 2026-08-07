@@ -13,6 +13,7 @@ add_executable(vrp_core_tests
     test_graph.cpp
     test_cost_matrix.cpp
     test_solution.cpp
+    test_local_search.cpp
 )
 
 target_link_libraries(vrp_core_tests
