@@ -24,6 +24,8 @@ from backend_python.service.sectorization import SECTORES, assign_sector, split_
 # requieren os.add_dll_directory() explícito. MINGW_BIN_DIR es opcional
 # (.env.local, no versionado, específico de cada máquina); sin ella, el
 # import de vrp_solver simplemente falla y el sistema usa el fallback Python.
+logger = logging.getLogger(__name__)
+
 if sys.platform == "win32":
     mingw_bin_dir = os.getenv("MINGW_BIN_DIR")
     if mingw_bin_dir and os.path.isdir(mingw_bin_dir):
@@ -35,8 +37,19 @@ try:
     HAS_CPP_BINDINGS = True
 except ImportError:
     HAS_CPP_BINDINGS = False
-
-logger = logging.getLogger(__name__)
+    # Sin bindings C++, _solve_python_fallback (NN puro) es el único camino
+    # de resolución — no tiene SimulatedAnnealing, ThreeOpt ni
+    # RelocateInterRoute (RN-037), así que corre con el bug real que RN-037
+    # corrige: clientes asignados a un vehículo subóptimo por NN quedan así
+    # para siempre. Este modo degradado es aceptable para tests/desarrollo
+    # sin toolchain de compilación, pero silencioso en producción sería
+    # indistinguible de "todo funciona normal" — de ahí el warning.
+    logger.warning(
+        "vrp_solver (C++ bindings) no disponible — usando fallback Python "
+        "puro (Nearest Neighbor sin SimulatedAnnealing/3-opt/RelocateInterRoute). "
+        "Las rutas generadas serán subóptimas. Verificar MINGW_BIN_DIR y que "
+        "vrp_solver*.pyd esté compilado y en el path."
+    )
 
 
 class SolverOrchestrator:
@@ -315,7 +328,23 @@ class SolverOrchestrator:
         sa_solution.calculate_total_cost()
         self.log.append(f"  3-opt cost: {sa_solution.total_cost:.2f}")
 
-        # 6. Convert C++ Solution → Python Solucion
+        # 6. Relocalización inter-ruta (RN-037) — paso final DESPUÉS de
+        # 3-opt. TwoOpt/OrOpt/ThreeOpt de arriba solo reordenan la
+        # secuencia DENTRO de cada ruta; ninguno puede mover un cliente al
+        # vehículo de otra ruta. Bug real reportado: NN asigna clientes a
+        # vehículos de forma greedy e irreversible — un vehículo grande
+        # podía terminar con una ruta serpenteante hasta una zona lejana
+        # (3 pedidos) mientras un cluster cercano de ~25 pedidos quedaba
+        # sin flota disponible, o un vehículo entero se dedicaba a un solo
+        # cliente aislado. Este paso prueba mover cada cliente a cada otra
+        # ruta con capacidad disponible, aplicando el primer movimiento que
+        # reduce el costo total combinado.
+        self.log.append("Step 4: Relocalización inter-ruta")
+        vrp_solver.RelocateInterRoute.improve(sa_solution, graph, cost_matrix, capacidades)
+        sa_solution.calculate_total_cost()
+        self.log.append(f"  Relocate cost: {sa_solution.total_cost:.2f}")
+
+        # 7. Convert C++ Solution → Python Solucion
         # cpp_route.sequence incluye el depósito (id=0) al inicio y fin de cada
         # ruta (depot -> clientes -> depot); Ruta.secuencia es solo clientes.
         # Se traduce cada índice de nodo contiguo de vuelta al id REAL del

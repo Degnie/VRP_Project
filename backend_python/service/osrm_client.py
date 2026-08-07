@@ -20,6 +20,22 @@ class OSRMError(Exception):
     """OSRM no disponible, timeout, o respuesta inválida."""
 
 
+# Magnitud máxima de un negativo que se trata como ruido de precisión de
+# OSRM (dos coordenadas muy cercanas snapeadas al mismo nodo vial pueden
+# calcular una distancia de -0.x metros en vez de 0.0 exacto) en vez de un
+# error real — CostMatrix.set_costs_bulk (C++) rechaza CUALQUIER negativo
+# (RN-008), así que sin este clamp la resolución de todo el sector fallaba
+# ante coordenadas perfectamente válidas que solo estaban muy cerca entre sí.
+_NEGATIVE_NOISE_THRESHOLD_METERS = -1.0
+
+
+def _clamp_negative_noise(distances: List[List[float]]) -> List[List[float]]:
+    return [
+        [0.0 if _NEGATIVE_NOISE_THRESHOLD_METERS <= cell < 0 else cell for cell in row]
+        for row in distances
+    ]
+
+
 # Metros máximos que OSRM puede "snapear" una coordenada pedida a la calle más
 # cercana antes de que la tratemos como sin sentido geográfico. Coordenadas con
 # ejes lat/lon invertidos (error común de import/integración) caen dentro del
@@ -89,7 +105,7 @@ def _table_request(coords: List[Tuple[float, float]], base_url: str, timeout_sec
     _validate_snap_distances(data.get("sources") or [])
     _validate_snap_distances(data.get("destinations") or [])
 
-    return distances
+    return _clamp_negative_noise(distances)
 
 
 def get_osrm_matrix(
@@ -166,6 +182,7 @@ def get_osrm_matrix(
             _validate_snap_distances(data.get("sources") or [])
             _validate_snap_distances(data.get("destinations") or [])
 
+            block_distances = _clamp_negative_noise(block_distances)
             for i, row in enumerate(block_distances):
                 for j, dist in enumerate(row):
                     matrix[row_start + i][col_start + j] = dist
